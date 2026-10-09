@@ -6,6 +6,7 @@ import dataclasses
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -32,6 +33,24 @@ from .runtime import Runtime, get_runtime
 from .targets import Target, get_target
 
 RUNTIME_DIR = "runtime"
+
+# Parts of the standard library an application can drop ([tool.pyxbuild]
+# slim = [...]). Patterns are relative to the runtime folder.
+SLIM_PRESETS: dict[str, list[str]] = {
+    "tests": ["DLLs/_test*.pyd", "DLLs/_ctypes_test.pyd", "DLLs/xxlimited*.pyd",
+              "DLLs/xxsubtype.pyd", "Lib/test/", "Lib/idlelib/idle_test/",
+              "Lib/tkinter/test/"],
+    "idle": ["Lib/idlelib/"],
+    "ensurepip": ["Lib/ensurepip/"],
+    "turtledemo": ["Lib/turtledemo/"],
+    "lib2to3": ["Lib/lib2to3/"],
+    "pydoc": ["Lib/pydoc_data/"],
+    "venv": ["Lib/venv/"],
+    "tk": ["Lib/tkinter/", "Lib/turtle.py", "Lib/idlelib/", "Lib/turtledemo/", "tcl/",
+           "DLLs/_tkinter.pyd", "DLLs/tcl*.dll", "DLLs/tk*.dll"],
+    "sqlite": ["Lib/sqlite3/", "DLLs/_sqlite3.pyd", "DLLs/sqlite3.dll"],
+}
+DEFAULT_SLIM = ("tests", "idle", "ensurepip", "turtledemo", "lib2to3")
 # Runtime parts that only matter for compiling extensions.
 RUNTIME_SKIP = ("include", "libs")
 DEFAULT_EPOCH = 315532800  # 1980-01-01, the earliest time a zip file can store
@@ -166,24 +185,66 @@ def _absolute_url(url: str, lock_path: Path) -> str:
     return str((lock_path.parent / url).resolve())
 
 
-def _copy_runtime(src: Path, dest: Path) -> None:
+def _copy_runtime(src: Path, dest: Path, slim: list[str] | None = None) -> int:
+    """Copy the runtime, leaving out what the bundle must not contain.
+
+    Skipped: ``include/``, ``libs/``, ``__pycache__``, everything in
+    ``site-packages`` (python-build-standalone preinstalls pip, and setuptools
+    for 3.11, which could clash with locked packages: torch on 3.11), and the
+    ``slim`` presets. Returns the number of bytes left out by ``slim``.
+    """
+    excluder = Excluder([p for name in slim or [] for p in SLIM_PRESETS[name]])
+    site = src / "Lib" / "site-packages"
+    skipped = 0
+
     def ignore(directory: str, names: list[str]) -> set[str]:
-        if Path(directory) == src:
-            return {n for n in names if n.lower() in RUNTIME_SKIP}
-        return {n for n in names if n == "__pycache__"}
+        nonlocal skipped
+        d = Path(directory)
+        if d == src:
+            out = {n for n in names if n.lower() in RUNTIME_SKIP}
+        elif d == site:
+            out = {n for n in names if n != "README.txt"}
+        else:
+            out = {n for n in names if n == "__pycache__"}
+        if excluder:
+            rel = d.relative_to(src).as_posix()
+            for n in names:
+                if n in out:
+                    continue
+                path = f"{rel}/{n}" if rel != "." else n
+                full = d / n
+                # match directories by their contents' prefix ("tcl/" -> "tcl/x")
+                probe = path + "/x" if full.is_dir() else path
+                if excluder.matches(probe):
+                    out.add(n)
+                    skipped += (sum(f.stat().st_size for f in full.rglob("*") if f.is_file())
+                                if full.is_dir() else full.stat().st_size)
+        return out
 
     shutil.copytree(src, dest, ignore=ignore)
-    # python-build-standalone preinstalls pip (and setuptools for 3.11). The
-    # bundle must contain exactly the locked packages: anything else could
-    # clash with them (torch requires its own setuptools on 3.11).
-    site = dest / "Lib" / "site-packages"
-    for item in sorted(site.iterdir()):
-        if item.name == "README.txt":
-            continue
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink()
+    return skipped
+
+
+def compile_bytecode(runtime_dir: Path, python: str) -> None:
+    """Write __pycache__/*.pyc for the whole runtime with a host CPython ``python``.
+
+    ``.pyc`` files depend only on the X.Y version, not on the OS. The
+    ``unchecked-hash`` mode never compares them with the source, so the app
+    neither recompiles on first start nor needs a writable folder, and the
+    embedded paths are made relative (``-s``) so the result is reproducible.
+    """
+    from .lock import uv_executable
+
+    cmd = [uv_executable(), "run", "--no-project", "--python", python, "--",
+           "python", "-I", "-m", "compileall", "-q", "-q", "-j", "0",
+           "--invalidation-mode", "unchecked-hash", "-s", str(runtime_dir), "-p", "",
+           str(runtime_dir / "Lib")]
+    env = {**os.environ, "UV_NO_PROGRESS": "1", "PYTHONHASHSEED": "0"}
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    # compileall exits 1 when a file does not compile (e.g. test data with
+    # syntax errors); those files simply stay without bytecode
+    if proc.returncode not in (0, 1):
+        raise PyxbuildError(f"compiling bytecode failed:\n{proc.stderr.strip()}")
 
 
 def _normalize_tree(root: Path, epoch: int) -> None:
@@ -218,7 +279,10 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
              *, launchers: bool = True) -> tuple[list[Path], doctor.Report]:
     """Lay out the application folder in ``app_dir`` (which must not exist)."""
     runtime_dir = app_dir / RUNTIME_DIR
-    _copy_runtime(tb.runtime.path, runtime_dir)
+    saved = _copy_runtime(tb.runtime.path, runtime_dir, cfg.slim)
+    if saved:
+        _log(opts, f"[{tb.target.name}] slim: removed {saved / 2**20:.1f} MB of the "
+             f"standard library ({', '.join(cfg.slim)})")
     _log(opts, f"[{tb.target.name}] installing {len(tb.wheels) + 1} wheel(s)")
     for wheel in sorted(tb.wheels, key=lambda p: p.name.lower()):
         install_wheel(wheel, runtime_dir)
@@ -227,6 +291,9 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     removed = apply_excludes(site_packages, Excluder(cfg.exclude))
     if removed:
         _log(opts, f"[{tb.target.name}] excluded {len(removed)} file(s)")
+    if cfg.bytecode:
+        _log(opts, f"[{tb.target.name}] compiling bytecode with host Python {tb.python}")
+        compile_bytecode(runtime_dir, tb.python)
 
     created: list[Path] = []
     if launchers:

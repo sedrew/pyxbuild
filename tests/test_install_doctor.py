@@ -144,3 +144,33 @@ def test_doctor_long_paths_and_known_issues(tmp_path, runtime):
     report = doctor.check_bundle(runtime.parent, runtime)
     assert any("MAX_PATH" in f.message for f in report.findings)
     assert any(f.message.startswith("playwright") for f in report.findings)
+
+
+def test_copy_runtime_skips_site_packages_dev_files_and_slim(tmp_path):
+    from pyxbuild.builder import _copy_runtime
+
+    src = tmp_path / "python"
+    for rel in ["python.exe", "include/Python.h", "libs/python312.lib", "Lib/os.py",
+                "Lib/__pycache__/os.cpython-312.pyc", "Lib/site-packages/README.txt",
+                "Lib/site-packages/pip/__init__.py", "Lib/site-packages/setuptools/x.py",
+                "Lib/idlelib/idle.py", "Lib/tkinter/__init__.py", "Lib/turtle.py",
+                "tcl/tcl8.6/init.tcl", "DLLs/_tkinter.pyd", "DLLs/tcl86t.dll",
+                "DLLs/_testcapi.pyd", "DLLs/_ssl.pyd", "Lib/test/test_x.py"]:
+        (src / rel).parent.mkdir(parents=True, exist_ok=True)
+        (src / rel).write_bytes(b"x" * 10)
+    dest = tmp_path / "out"
+    skipped = _copy_runtime(src, dest, ["tests", "idle", "tk"])
+    got = sorted(p.relative_to(dest).as_posix() for p in dest.rglob("*") if p.is_file())
+    assert got == ["DLLs/_ssl.pyd", "Lib/os.py", "Lib/site-packages/README.txt", "python.exe"]
+    assert skipped == 10 * 8  # idle, tkinter, turtle, tcl, _tkinter, tcl86t, _testcapi, test
+
+
+def test_unknown_slim_preset_is_rejected(tmp_path):
+    from pyxbuild.config import load_config
+    from pyxbuild.errors import ConfigError
+
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "a"\nversion = "1"\n[project.scripts]\na = "a:b"\n'
+        '[tool.pyxbuild]\nslim = ["everything"]\n')
+    with pytest.raises(ConfigError, match="unknown slim preset"):
+        load_config(tmp_path)

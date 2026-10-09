@@ -263,3 +263,23 @@ def test_golden(app, python, tmp_path, shared_cache):
     proc = run_exe(app_dir / f"{app}.exe", env=env, timeout=1800)
     assert "FAIL" not in proc.stdout, proc.stdout + proc.stderr
     assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+@needs_runner
+@pytest.mark.skipif(ON_WINDOWS, reason="read-only via POSIX permissions")
+def test_bytecode_app_runs_from_read_only_folder(tmp_path, shared_cache):
+    proj = copy_project("hello", tmp_path)
+    text = (proj / "pyproject.toml").read_text() + "\n[tool.pyxbuild]\nbytecode = true\n"
+    (proj / "pyproject.toml").write_text(text)
+    app = build(proj, shared_cache, "--python", "3.12")
+    before = file_digest_tree(app)
+    assert any(k.endswith(".cpython-312.pyc") and "/requests/" in k for k in before)
+    for p in [app, *app.rglob("*")]:
+        p.chmod(p.stat().st_mode & ~0o222)
+    try:
+        proc = run_exe(app / "hello.exe", "--exit=0")
+        assert proc.returncode == 0, proc.stderr
+        assert file_digest_tree(app) == before  # nothing written next to the app
+    finally:
+        for p in [app, *app.rglob("*")]:
+            p.chmod(p.stat().st_mode | 0o200)

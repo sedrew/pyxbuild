@@ -27,7 +27,7 @@ _SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _KNOWN_KEYS = {
     "targets", "python", "runtime", "mode", "icon", "lock", "exclude", "zip",
     "dist-dir", "index-url", "extra-index-urls", "find-links", "allow-sdist",
-    "cross-compile", "pure-python", "extras", "scripts",
+    "cross-compile", "pure-python", "extras", "scripts", "slim", "bytecode",
     "version-info", "utf8-mode",
 }
 
@@ -72,6 +72,11 @@ class ProjectConfig:
     extra_index_urls: list[str] = field(default_factory=list)
     find_links: list[str] = field(default_factory=list)
     allow_sdist: bool = False
+    slim: list[str] = field(default_factory=lambda: ["tests", "idle", "ensurepip",
+                                                     "turtledemo", "lib2to3"])
+    """Standard-library parts to drop (see builder.SLIM_PRESETS)."""
+    bytecode: bool = False
+    """Precompile .pyc (unchecked-hash) with a host interpreter of the same X.Y."""
     pure_python: list[str] = field(default_factory=list)
     """Build these from sdist on the host without their optional C extension."""
     cross_compile: bool | list[str] = False
@@ -253,6 +258,18 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
             raise ConfigError("[tool.pyxbuild] cross-compile must be true, false or a list "
                               "of package names")
         cfg.cross_compile = value
+    if "slim" in tool:
+        from .builder import SLIM_PRESETS
+
+        cfg.slim = _str_list(tool["slim"], "slim")
+        unknown_slim = sorted(set(cfg.slim) - set(SLIM_PRESETS))
+        if unknown_slim:
+            raise ConfigError(f"unknown slim preset(s): {', '.join(unknown_slim)}",
+                              hint=f"known: {', '.join(SLIM_PRESETS)}")
+    if "bytecode" in tool:
+        if not isinstance(tool["bytecode"], bool):
+            raise ConfigError("[tool.pyxbuild] bytecode must be true or false")
+        cfg.bytecode = tool["bytecode"]
     if "pure-python" in tool:
         from .fallbacks import PURE_PYTHON_SWITCHES
 
