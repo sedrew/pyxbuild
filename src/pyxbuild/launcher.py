@@ -22,7 +22,8 @@ FORMAT_VERSION = 1
 TRAILER = struct.Struct("<II8s")
 
 # Interpreter flags: -I isolates the app from PYTHON* variables, the user
-# site-packages and the current directory (it implies -E -s -P).
+# site-packages and the current directory (it implies -E -s -P). Because of
+# -E, PYTHONIOENCODING/PYTHONUTF8 have no effect; use utf8-mode = true instead.
 DEFAULT_FLAGS = "-I"
 
 
@@ -86,11 +87,12 @@ def decode_manifest(exe: bytes) -> dict[str, str]:
     return dict(line.split("=", 1) for line in payload.splitlines() if line)
 
 
-def build_launcher(entry: EntryPoint, target: str, *, python_rel: str) -> bytes:
+def build_launcher(entry: EntryPoint, target: str, *, python_rel: str,
+                   utf8_mode: bool = False) -> bytes:
     interpreter = python_rel + ("\\pythonw.exe" if entry.gui else "\\python.exe")
     fields = {
         "python": interpreter,
-        "flags": DEFAULT_FLAGS,
+        "flags": DEFAULT_FLAGS + (" -X utf8" if utf8_mode else ""),
         "code": bootstrap_code(entry),
         "entry-point": f"{entry.module}:{entry.attr}",
     }

@@ -4,7 +4,7 @@ import sys
 def run() -> int:
     import requests
 
-    print("argv", sys.argv[1:])
+    print("argv", ascii(sys.argv[1:]))
     print("executable", sys.executable)
     print("requests", requests.__version__)
     if "--https" in sys.argv:

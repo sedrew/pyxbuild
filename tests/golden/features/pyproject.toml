@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "features"
+version = "0.3.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+features = "features.main:run"
+
+[project.gui-scripts]
+features-gui = "features.main:gui"
+
+[tool.pyxbuild]
+exclude = ["*.pyi"]
+utf8-mode = true

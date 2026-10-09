@@ -203,7 +203,8 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     if launchers:
         for entry in cfg.entry_points:
             exe = app_dir / f"{entry.name}{tb.target.exe_suffix}"
-            exe.write_bytes(build_launcher(entry, tb.target.name, python_rel=RUNTIME_DIR))
+            exe.write_bytes(build_launcher(entry, tb.target.name, python_rel=RUNTIME_DIR,
+                                           utf8_mode=cfg.utf8_mode))
             created.append(exe)
 
     info = {

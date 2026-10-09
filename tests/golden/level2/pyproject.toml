@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "golden-level2"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "matplotlib",
+    "scipy",
+    "pywin32; sys_platform == 'win32'",
+    "psutil",
+    "orjson",
+    "pyzmq",
+    "opencv-python-headless",
+    "PySide6-Essentials",
+]
+
+[project.scripts]
+level2 = "level2.main:run"
+
+[tool.pyxbuild]
+exclude = ["*.pyi"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/level2"]

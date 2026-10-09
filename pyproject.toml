@@ -51,6 +51,7 @@ markers = [
     "network: needs access to PyPI / GitHub releases",
     "wine: runs built executables (Wine on Linux/macOS, natively on Windows)",
     "slow: builds full applications",
+    "golden: golden-set builds (many large packages)",
 ]
 
 [tool.ruff]
@@ -60,3 +61,6 @@ src = ["src", "tests", "tools"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pyxbuild", "conftest", "test_launcher_pe"]

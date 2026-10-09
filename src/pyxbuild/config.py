@@ -27,7 +27,7 @@ _SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _KNOWN_KEYS = {
     "targets", "python", "runtime", "mode", "icon", "lock", "exclude", "zip",
     "dist-dir", "index-url", "extra-index-urls", "allow-sdist", "extras", "scripts",
-    "version-info",
+    "version-info", "utf8-mode",
 }
 
 
@@ -72,6 +72,7 @@ class ProjectConfig:
     allow_sdist: bool = False
     extras: list[str] = field(default_factory=list)
     version_info: dict[str, str] = field(default_factory=dict)
+    utf8_mode: bool = False
 
     @property
     def normalized_name(self) -> str:
@@ -227,6 +228,10 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
         cfg.allow_sdist = tool["allow-sdist"]
     if "extras" in tool:
         cfg.extras = _str_list(tool["extras"], "extras")
+    if "utf8-mode" in tool:
+        if not isinstance(tool["utf8-mode"], bool):
+            raise ConfigError("[tool.pyxbuild] utf8-mode must be true or false")
+        cfg.utf8_mode = tool["utf8-mode"]
     if "version-info" in tool:
         vi = tool["version-info"]
         if not isinstance(vi, dict) or not all(isinstance(v, str) for v in vi.values()):
