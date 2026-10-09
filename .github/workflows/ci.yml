@@ -79,9 +79,19 @@ jobs:
           path: artifacts
       - name: compare SHA256SUMS
         run: |
-          for f in artifacts/*/SHA256SUMS; do echo "== $f"; cat "$f"; done
-          diff artifacts/golden-ubuntu-latest/SHA256SUMS artifacts/golden-macos-14/SHA256SUMS
-          diff artifacts/golden-ubuntu-latest/SHA256SUMS artifacts/golden-windows-latest/SHA256SUMS
+          status=0
+          for host in macos-14 windows-latest; do
+            echo "== ubuntu-latest vs $host"
+            for f in artifacts/golden-ubuntu-latest/*.files.txt; do
+              diff "$f" "artifacts/golden-$host/$(basename "$f")" > /dev/null || {
+                echo "-- $(basename "$f"): files that differ"
+                diff "$f" "artifacts/golden-$host/$(basename "$f")" | head -20
+                status=1
+              }
+            done
+            diff artifacts/golden-ubuntu-latest/SHA256SUMS "artifacts/golden-$host/SHA256SUMS" || status=1
+          done
+          exit $status
 
   run-on-windows:
     name: run apps built on ${{ matrix.built-on }} on windows-latest
@@ -124,7 +134,7 @@ jobs:
           name: golden-macos-14
           path: golden-out
       - run: python tools/compare_with_pip.py golden-out/level1-py${{ matrix.python }}.zip golden-out/level1-py${{ matrix.python }}.pylock.toml
-      - run: python tools/compare_with_pip.py golden-out/level2-py${{ matrix.python }}.zip golden-out/level2-py${{ matrix.python }}.pylock.toml
+      - run: python tools/compare_with_pip.py golden-out/level2-py${{ matrix.python }}.zip golden-out/level2-py${{ matrix.python }}.pylock.toml "*.pyi"
 
   e2e:
     name: e2e on ${{ matrix.os }}

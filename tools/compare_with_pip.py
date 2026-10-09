@@ -1,6 +1,6 @@
 """Compare an application built by pyxbuild with ``pip install`` on real Windows.
 
-    python tools/compare_with_pip.py APP.zip PYLOCK.toml
+    python tools/compare_with_pip.py APP.zip PYLOCK.toml [EXCLUDE-PATTERN ...]
 
 Run on Windows with the same Python minor version as the app. Installs the
 exact wheels from the lock file with pip into a fresh venv and compares the
@@ -49,6 +49,8 @@ def tree(site: Path, dists: set[str]) -> dict[str, set[str]]:
 
 def main() -> int:
     app_zip, lock_path = Path(sys.argv[1]), Path(sys.argv[2])
+    # files the project excluded on purpose ([tool.pyxbuild] exclude)
+    excludes = sys.argv[3:]
     lock = tomllib.loads(lock_path.read_text(encoding="utf-8"))
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
     from pyxbuild.lock import read_lock, select_files
@@ -74,6 +76,10 @@ def main() -> int:
         dists = {s.package.name.replace("-", "_").lower() for s in selections}
         ours = tree(app_dir / "runtime" / "Lib" / "site-packages", dists)
         theirs = tree(venv / "Lib" / "site-packages", dists)
+    from pyxbuild.install import Excluder
+
+    excluder = Excluder(excludes)
+    theirs = {d: {p for p in paths if not excluder.matches(p)} for d, paths in theirs.items()}
     problems = []
     for dist in sorted(set(ours) | set(theirs)):
         if dist not in ours or dist not in theirs:

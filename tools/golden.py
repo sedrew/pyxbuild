@@ -54,6 +54,11 @@ def build(out: Path, only: set[str]) -> int:
                                 out / f"{project}-py{py}.pylock.toml")
                 digest = hashlib.sha256(dest.read_bytes()).hexdigest()
                 sums.append(f"{digest}  {dest.name}")
+                # per-file digests, so a mismatch between hosts names the files
+                with zipfile.ZipFile(dest) as zf:
+                    lines = [f"{hashlib.sha256(zf.read(i)).hexdigest()}  {i.filename}"
+                             for i in zf.infolist()]
+                (out / f"{project}-py{py}.files.txt").write_text("\n".join(lines) + "\n")
                 print(sums[-1], flush=True)
     (out / "SHA256SUMS").write_text("\n".join(sums) + "\n")
     return 0
