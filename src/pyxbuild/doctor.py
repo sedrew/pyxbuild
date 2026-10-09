@@ -14,7 +14,7 @@ ERROR = "error"
 WARNING = "warning"
 INFO = "info"
 
-# DLLs shipped with every supported Windows (10 1809+ / Server 2019+).
+# DLLs shipped with every supported Windows (10 1903+ / Server 2022+; icu*.dll since 1903).
 # Lower-case. Anything matching api-ms-win-* / ext-ms-win-* is a Windows API set.
 SYSTEM_DLLS = frozenset(
     """
@@ -28,22 +28,22 @@ dbgcore.dll dbgeng.dll dbghelp.dll dcomp.dll ddraw.dll devobj.dll dhcpcsvc.dll d
 dinput8.dll dnsapi.dll dpapi.dll dsound.dll dsrole.dll dwmapi.dll dwmcore.dll dwrite.dll
 dxcompiler.dll dxcore.dll dxgi.dll dxva2.dll esent.dll evr.dll faultrep.dll firewallapi.dll
 fltlib.dll fwbase.dll fwpuclnt.dll gdi32.dll gdiplus.dll glu32.dll hid.dll httpapi.dll
-icmp.dll imagehlp.dll imm32.dll inputhost.dll iphlpapi.dll kernel32.dll kernelbase.dll
-ksuser.dll ktmw32.dll loadperf.dll locationapi.dll logoncli.dll lz32.dll mapi32.dll mf.dll
-mfcore.dll mfplat.dll mfreadwrite.dll mfsensorgroup.dll mfsrcsnk.dll mfuuid.dll mlang.dll
-mmdevapi.dll mpr.dll msacm32.dll mscms.dll msctf.dll msi.dll msimg32.dll msvcrt.dll
-msvfw32.dll mswsock.dll msxml6.dll ncrypt.dll netapi32.dll netutils.dll normaliz.dll nsi.dll
-ntdll.dll ntdsapi.dll ntmarta.dll odbc32.dll odbccp32.dll ole32.dll oleacc.dll oleaut32.dll
-oledlg.dll opengl32.dll pdh.dll photometadatahandler.dll powrprof.dll profapi.dll
-propsys.dll psapi.dll query.dll rasapi32.dll resutils.dll rpcrt4.dll rstrtmgr.dll samcli.dll
-sechost.dll secur32.dll sensorsapi.dll setupapi.dll sfc.dll sfc_os.dll shcore.dll
-shell32.dll shfolder.dll shlwapi.dll srvcli.dll sspicli.dll tapi32.dll tdh.dll traffic.dll
-twinapi.dll ucrtbase.dll uiautomationcore.dll umpdc.dll urlmon.dll user32.dll userenv.dll
-usp10.dll uxtheme.dll version.dll virtdisk.dll vssapi.dll wbemuuid.dll websocket.dll wer.dll
-wevtapi.dll windows.storage.dll windowscodecs.dll winhttp.dll wininet.dll winmm.dll
-winnsi.dll winscard.dll winspool.drv wintrust.dll wintypes.dll winusb.dll wkscli.dll
-wlanapi.dll wldap32.dll wmi.dll wmvcore.dll ws2_32.dll wsock32.dll wtsapi32.dll
-xaudio2_9.dll xinput1_4.dll xinput9_1_0.dll xmllite.dll
+icmp.dll icu.dll icuin.dll icuuc.dll imagehlp.dll imm32.dll inputhost.dll iphlpapi.dll
+kernel32.dll kernelbase.dll ksuser.dll ktmw32.dll loadperf.dll locationapi.dll logoncli.dll
+lz32.dll mapi32.dll mf.dll mfcore.dll mfplat.dll mfreadwrite.dll mfsensorgroup.dll
+mfsrcsnk.dll mfuuid.dll mlang.dll mmdevapi.dll mpr.dll msacm32.dll mscms.dll msctf.dll
+msi.dll msimg32.dll msvcrt.dll msvfw32.dll mswsock.dll msxml6.dll ncrypt.dll netapi32.dll
+netutils.dll normaliz.dll nsi.dll ntdll.dll ntdsapi.dll ntmarta.dll odbc32.dll odbccp32.dll
+ole32.dll oleacc.dll oleaut32.dll oledlg.dll opengl32.dll pdh.dll photometadatahandler.dll
+powrprof.dll profapi.dll propsys.dll psapi.dll query.dll rasapi32.dll resutils.dll
+rpcrt4.dll rstrtmgr.dll samcli.dll sechost.dll secur32.dll sensorsapi.dll setupapi.dll
+sfc.dll sfc_os.dll shcore.dll shell32.dll shfolder.dll shlwapi.dll srvcli.dll sspicli.dll
+tapi32.dll tdh.dll traffic.dll twinapi.dll ucrtbase.dll uiautomationcore.dll umpdc.dll
+urlmon.dll user32.dll userenv.dll usp10.dll uxtheme.dll version.dll virtdisk.dll vssapi.dll
+wbemuuid.dll websocket.dll wer.dll wevtapi.dll windows.storage.dll windowscodecs.dll
+winhttp.dll wininet.dll winmm.dll winnsi.dll winrt.dll winscard.dll winspool.drv
+wintrust.dll wintypes.dll winusb.dll wkscli.dll wlanapi.dll wldap32.dll wmi.dll wmvcore.dll
+ws2_32.dll wsock32.dll wtsapi32.dll xaudio2_9.dll xinput1_4.dll xinput9_1_0.dll xmllite.dll
 """.split()  # noqa: SIM905
 )
 

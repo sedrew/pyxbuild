@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import shutil
@@ -304,11 +305,17 @@ def check(cfg: ProjectConfig, opts: BuildOptions) -> list[tuple[str, doctor.Repo
         target = get_target(target_name)
         report = doctor.Report()
         with tempfile.TemporaryDirectory(prefix="pyxbuild-doctor-") as tmp:
+            # never touch the project's lock file: work on a copy
+            scratch_lock = Path(tmp) / "pylock.toml"
+            if cfg.lock_path(target_name).exists():
+                shutil.copyfile(cfg.lock_path(target_name), scratch_lock)
+            scratch_cfg = dataclasses.replace(cfg, lock=scratch_lock)
             try:
-                tb = prepare(cfg, target, opts, Path(tmp))
+                tb = prepare(scratch_cfg, target, opts, Path(tmp))
             except PyxbuildError as exc:
                 report.add(doctor.ERROR, str(exc))
             else:
-                _, report = assemble(cfg, tb, Path(tmp) / "app", opts, launchers=False)
+                _, report = assemble(scratch_cfg, tb, Path(tmp) / "app", opts,
+                                     launchers=False)
         out.append((target_name, report))
     return out

@@ -229,6 +229,7 @@ def test_doctor_command(tmp_path, shared_cache, capsys):
     out = capsys.readouterr().out
     assert rc == 0, out
     assert "== win_amd64 ==" in out
+    assert not list(proj.glob("pylock*.toml")), "doctor must not write the lock file"
 
 
 def _win(path: Path) -> str:
