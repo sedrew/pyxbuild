@@ -15,6 +15,16 @@ and the claim "it works" always rests on a run on real Windows.
 
 Ctrl+Break forwarding (`test_ctrl_break_...`) only runs on real Windows.
 
+Further suites: `test_imports.py` (import check), `test_boot.py` (start-up
+shim), `test_sdist.py` (pure-Python sdists, `pure-python` fallback with real
+msgpack/PyYAML, zig cross-compilation), `test_review_regressions.py`
+(security and correctness fixes from the code review: wheel path traversal,
+cache file names, host ABI flags, self-referencing extras, portable locks),
+`test_resources.py` (icon/VERSIONINFO validated with `pefile`, and with the
+Windows version API on Windows). `tools/cross_matrix.py` tries
+cross-compilation on real PyPI sdists; `tools/bench.py` measures build time,
+size and start-up (see [BENCHMARKS.md](BENCHMARKS.md)).
+
 ## Wine
 
 Wine is a convenience for fast local feedback, not the reference. Ubuntu

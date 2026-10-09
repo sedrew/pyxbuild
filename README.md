@@ -59,6 +59,15 @@ zip = true
 utf8-mode = false          # run the app with -X utf8
 icon = "assets/app.ico"    # launcher icon; VERSIONINFO comes from [project]
 find-links = ["wheels/"]   # extra local wheels (e.g. built in CI)
+slim = ["tests", "idle", "ensurepip", "turtledemo", "lib2to3", "tk"]  # drop stdlib parts
+bytecode = true            # precompiled .pyc: fast first start, read-only folders
+pure-python = ["msgpack"]  # build without the optional C extension (no wheel case)
+cross-compile = ["markupsafe"]  # experimental: compile C extensions with zig
+app-id = "Acme.MyApp"      # GUI: taskbar identity (AppUserModelID)
+truststore = true          # use the Windows certificate store for TLS
+
+[tool.pyxbuild.env]        # set at start-up; {app_dir} {data_dir} {localappdata}
+NLTK_DATA = "{app_dir}\\nltk_data"
 
 [tool.pyxbuild.version-info]
 company-name = "ACME"
@@ -78,17 +87,27 @@ Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
 ## Limits
 
 * Every dependency needs a `win_amd64`, `abi3` or pure-Python wheel on the
-  index. `pyxbuild doctor` lists the ones that do not. Pure-Python sdists can
-  be allowed with `allow-sdist = true`; sdists with C code are refused.
+  index, or one of the fallbacks in [docs/NO_WHEEL.md](docs/NO_WHEEL.md)
+  (`pure-python`, Windows-CI wheels via `find-links`, experimental
+  `cross-compile` with zig — 14 of 19 tested sdists build that way).
 * The project itself must be pure Python.
 * Some wheels need Visual C++ runtime DLLs that Windows does not ship
   (torch, ...). `pyxbuild doctor` lists them; add `msvc-runtime` to the
   dependencies to bundle them.
 * Only the folder mode and the `win_amd64` target exist so far.
 
-See [docs/DESIGN.md](docs/DESIGN.md), [docs/TESTING.md](docs/TESTING.md),
-[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) (38 packages with compiled code ×
-Python 3.11–3.14) and [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md).
+Documentation: [design](docs/DESIGN.md) · [testing](docs/TESTING.md) ·
+[compatibility matrix](docs/COMPATIBILITY.md) (38 packages × Python 3.11–3.14) ·
+[no wheel for the target?](docs/NO_WHEEL.md) ·
+[real-world issues and coverage](docs/REAL_WORLD_ISSUES.md) ·
+[benchmarks vs PyInstaller](docs/BENCHMARKS.md) ·
+[Go / TypeScript comparison](docs/GO_TYPESCRIPT.md) ·
+[open questions](docs/OPEN_QUESTIONS.md).
+
+`pyxbuild doctor` also checks the project's own imports (undeclared
+dependencies, POSIX-only modules such as `fcntl`), DLLs and the VC++ runtime,
+several OpenMP runtimes, packages held back for lack of wheels, and packages
+known to download data or compile at run time.
 
 [python-build-standalone]: https://github.com/astral-sh/python-build-standalone
 

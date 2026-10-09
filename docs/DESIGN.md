@@ -34,6 +34,14 @@ Modules: `config.py`, `targets.py` (markers, tags), `runtime.py`, `lock.py`,
   `site` processes `.pth` files (pywin32), `importlib.metadata` and
   `pip list` work, `sys.prefix` is normal, and no `sys.path` patching is
   needed.
+* **The launcher is a 7 KB C program without a C runtime** (only KERNEL32
+  and USER32; own entry point). The child is created suspended, put into a
+  job object, then resumed; the GUI variant clears Explorer's busy cursor.
+* **Start-up shim** `runtime/Lib/_pyxbuild_boot.py` (application launchers
+  only): reads `pyxbuild.json`, removes foreign `TCL_LIBRARY`/`QT_*`
+  variables, sets `[tool.pyxbuild.env]`, gives GUI apps a log file and an
+  error dialog, AppUserModelID, DPI awareness, optional truststore, then
+  calls the entry point.
 * **Launcher spawns `runtime\python.exe`** as a child process in a job
   object (like the pip/distlib and uv launchers), instead of embedding
   `python3XX.dll`. Consequences: `sys.executable` is a real interpreter, so
@@ -51,9 +59,11 @@ Modules: `config.py`, `targets.py` (markers, tags), `runtime.py`, `lock.py`,
   `python=..\python.exe` instead of distlib launchers, which need an
   absolute interpreter path.
 * **pip is removed** from the bundled runtime.
-* **No bytecode** is written at build time (it would need a host interpreter
-  of the exact target version); Python writes `__pycache__` on first run when
-  the folder is writable.
+* **Bytecode** is optional (`bytecode = true`): a host CPython of the same
+  X.Y (provided by uv) writes unchecked-hash `.pyc` with `/`-separated
+  embedded paths, so builds stay reproducible across hosts.
+* **No-wheel fallbacks** (`fallbacks.py`, `crossbuild.py`): see
+  [NO_WHEEL.md](NO_WHEEL.md).
 * **Runtime pinning**: `src/pyxbuild/runtimes.json` lists one
   python-build-standalone release with sha256 per Python version, generated
   by `tools/update_runtimes.py <release>`. `PYXBUILD_RUNTIME_MIRROR` overrides

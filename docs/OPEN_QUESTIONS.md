@@ -65,6 +65,26 @@ later.
     compatibility matrix and the doctor's known-issues list, not by a
     dedicated test.
 
+## Added in the second session
+
+16. **`bytecode` default.** Off today (bundle +27 %), but without it the
+    first start of a numpy/pandas app takes ~5 s on Windows and the app
+    needs a writable folder. Turn it on by default?
+17. **`cross-compile` is experimental.** 14/19 real sdists built from Linux
+    and pass under Wine; nothing has run on real Windows yet except through
+    pyxbuild's own tests. Keep it opt-in per package?
+18. **`clean-env` default list** removes `TCL_LIBRARY`, `TK_LIBRARY`,
+    `QT_PLUGIN_PATH`, `QT_QPA_PLATFORM_PLUGIN_PATH`, `QML*_IMPORT_PATH` at
+    start-up. `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE` are kept (corporate
+    proxies rely on them). Right balance?
+19. **GUI apps get DPI awareness by default** (`dpi-aware = true`). Apps
+    that draw with Tk at fixed pixel sizes may look small on 200 % screens.
+20. **Default `slim`** drops tests, idlelib, ensurepip, turtledemo, lib2to3.
+    Should `tk` also be dropped automatically when nothing imports tkinter?
+21. **The process is still `python.exe`/`pythonw.exe`** (taskbar icon,
+    Task Manager, firewall prompt). A per-app copy of `pythonw.exe` with our
+    resources would fix it; worth the extra complexity?
+
 ## Not done (out of the MVP as approved)
 
 - onefile mode, win_arm64/macOS/Linux targets, installers (MSI/NSIS);
