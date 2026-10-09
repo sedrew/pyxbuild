@@ -283,7 +283,10 @@ from appwrap._h import *
 
 def smoke():
     import gradio as gr
-    demo = gr.Interface(lambda s: s[::-1], "text", "text")
+    def reverse(s):
+        return s[::-1]
+
+    demo = gr.Interface(reverse, "text", "text", api_name="reverse")
     port = free_port()
     demo.launch(server_name="127.0.0.1", server_port=port, prevent_thread_lock=True,
                 quiet=True)
@@ -292,7 +295,7 @@ def smoke():
         assert status == 200 and b"gradio" in body.lower()
         from gradio_client import Client
         assert Client(f"http://127.0.0.1:{port}/", verbose=False).predict(
-            "abc", api_name="/predict") == "cba"
+            "abc", api_name="/reverse") == "cba"
     finally:
         demo.close()
     return gr.__version__
