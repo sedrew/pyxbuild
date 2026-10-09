@@ -109,11 +109,17 @@ def source_date_epoch() -> int:
 
 
 def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
-            *, download: bool = True) -> TargetBuild:
+            *, download: bool = True, lock_base: Path | None = None) -> TargetBuild:
     """Everything up to (and including) downloading wheels; writes only the lock file."""
     python = opts.python or cfg.choose_python()
     _log(opts, f"[{target.name}] Python {python} runtime ({cfg.runtime})")
     runtime = get_runtime(target, python, quiet=opts.quiet)
+    if cfg.requires_python is not None and not cfg.requires_python.contains(
+            runtime.spec.version, prereleases=True):
+        raise PyxbuildError(
+            f"requires-python {cfg.requires_python} excludes the bundled Python "
+            f"{runtime.spec.version}",
+            hint="choose another 'python', or update the pinned runtimes")
     env = target.marker_environment(runtime.spec.version, runtime.marker_overrides())
 
     _log(opts, f"[{target.name}] building wheel for {cfg.name}")
@@ -125,16 +131,27 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
                  "separate package with win_amd64 wheels (e.g. with cibuildwheel)",
         )
 
-    requirements = requirement_lines(wheel.requires_dist, target, env, cfg.extras)
+    requirements = requirement_lines(wheel.requires_dist, target, env, cfg.extras,
+                                     project=wheel.name)
     inputs = LockInputs(
         requirements=tuple(requirements), target=target.name,
         python_version=runtime.spec.version, index_url=cfg.index_url,
         extra_index_urls=tuple(cfg.extra_index_urls), allow_sdist=cfg.sdists_allowed,
-        find_links=tuple(cfg.find_links), no_binary=tuple(cfg.only_sdist),
+        find_links=tuple(cfg.find_links), find_links_key=tuple(cfg.find_links_cfg),
+        no_binary=tuple(cfg.only_sdist),
     )
     lock_path = cfg.lock_path(target.name)
     lock = read_lock(lock_path) if lock_path.exists() else None
-    fresh = lock is not None and lock.inputs_digest == inputs.digest()
+    if lock is not None and lock.inputs_digest is None:
+        # a PEP 751 lock written by another tool: use it, never overwrite it
+        if opts.relock:
+            raise ResolveError(
+                f"{lock_path} was not written by pyxbuild; refusing to overwrite it",
+                hint="remove it, or point 'lock' at another file")
+        _log(opts, f"[{target.name}] using {lock_path.name} as is (not written by pyxbuild)")
+        fresh = True
+    else:
+        fresh = lock is not None and lock.inputs_digest == inputs.digest()
     if not fresh or opts.relock:
         if opts.frozen:
             state = "missing" if lock is None else "out of date"
@@ -149,8 +166,8 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
 
     tb = TargetBuild(target, python, runtime, env, wheel, lock_path)
     for sel in selections if download else []:
-        path = fetch(_absolute_url(sel.file.url, lock_path), sel.file.sha256, sel.file.name,
-                     quiet=opts.quiet)
+        path = fetch(_absolute_url(sel.file.url, lock_base or lock_path.parent),
+                     sel.file.sha256, sel.file.name, quiet=opts.quiet)
         if not sel.is_wheel and sel.package.name in cfg.pure_python:
             from .fallbacks import pure_python_env
 
@@ -180,10 +197,11 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
     return tb
 
 
-def _absolute_url(url: str, lock_path: Path) -> str:
+def _absolute_url(url: str, base: Path) -> str:
+    """PEP 751 ``path`` entries are relative to the lock file's directory."""
     if "://" in url:
         return url
-    return str((lock_path.parent / url).resolve())
+    return str((base / url).resolve())
 
 
 def _copy_runtime(src: Path, dest: Path, slim: list[str] | None = None, *,
@@ -237,15 +255,30 @@ def compile_bytecode(runtime_dir: Path, python: str) -> None:
     """
     from .lock import uv_executable
 
-    cmd = [uv_executable(), "run", "--no-project", "--python", python, "--",
-           "python", "-I", "-m", "compileall", "-q", "-q", "-j", "0",
-           "--invalidation-mode", "unchecked-hash", "-s", str(runtime_dir), "-p", "",
-           str(runtime_dir / "Lib")]
+    # Our own driver instead of compileall: the path embedded in each .pyc is
+    # always "Lib/x.py" with "/" (compileall -s/-p would use "\\" on Windows
+    # hosts) and files are processed in sorted order.
+    driver = (
+        "import os,sys,py_compile\n"
+        "root=sys.argv[1]\n"
+        "mode=py_compile.PycInvalidationMode.UNCHECKED_HASH\n"
+        "bad=0\n"
+        "for d,ds,fs in os.walk(os.path.join(root,'Lib')):\n"
+        "    ds.sort()\n"
+        "    for f in sorted(fs):\n"
+        "        if not f.endswith('.py'): continue\n"
+        "        src=os.path.join(d,f)\n"
+        "        rel=os.path.relpath(src,root).replace(os.sep,'/')\n"
+        "        try: py_compile.compile(src,dfile=rel,doraise=True,invalidation_mode=mode)\n"
+        "        except py_compile.PyCompileError: bad+=1\n"
+        "print(bad)\n"
+    )
+    cmd = [uv_executable(), "run", "--no-project", "--no-config", "--python", python, "--",
+           "python", "-I", "-c", driver, str(runtime_dir)]
     env = {**os.environ, "UV_NO_PROGRESS": "1", "PYTHONHASHSEED": "0"}
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
-    # compileall exits 1 when a file does not compile (e.g. test data with
-    # syntax errors); those files simply stay without bytecode
-    if proc.returncode not in (0, 1):
+    # files with syntax errors (test data) simply stay without bytecode
+    if proc.returncode != 0:
         raise PyxbuildError(f"compiling bytecode failed:\n{proc.stderr.strip()}")
 
 
@@ -433,7 +466,8 @@ def check(cfg: ProjectConfig, opts: BuildOptions) -> list[tuple[str, doctor.Repo
                 shutil.copyfile(cfg.lock_path(target_name), scratch_lock)
             scratch_cfg = dataclasses.replace(cfg, lock=scratch_lock)
             try:
-                tb = prepare(scratch_cfg, target, opts, Path(tmp))
+                tb = prepare(scratch_cfg, target, opts, Path(tmp),
+                             lock_base=cfg.lock_path(target_name).parent)
             except PyxbuildError as exc:
                 report.add(doctor.ERROR, str(exc))
             else:

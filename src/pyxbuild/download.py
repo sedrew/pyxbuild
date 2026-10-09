@@ -67,7 +67,14 @@ def fetch(url: str, sha256: str, filename: str, *, quiet: bool = False) -> Path:
     sha256 = sha256.lower()
     if len(sha256) != 64 or any(c not in "0123456789abcdef" for c in sha256):
         raise DownloadError(f"invalid sha256 for {filename}: {sha256!r}")
-    dest = cache_dir() / "blobs" / sha256 / filename
+    # the name comes from a lock file: it must be one plain path component
+    if (not filename or filename in (".", "..") or any(c in filename for c in "/\\:\0")
+            or filename != filename.strip()):
+        raise DownloadError(f"refusing unsafe file name {filename!r}")
+    blob_dir = cache_dir() / "blobs" / sha256
+    dest = blob_dir / filename
+    if not dest.resolve().is_relative_to(blob_dir.resolve()):
+        raise DownloadError(f"refusing unsafe file name {filename!r}")
     if dest.is_file():
         return dest
     if offline():
@@ -77,14 +84,23 @@ def fetch(url: str, sha256: str, filename: str, *, quiet: bool = False) -> Path:
     tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "wb") as out:
-            _download_to(url, out, quiet=quiet, filename=filename)
+            try:
+                _download_to(url, out, quiet=quiet, filename=filename)
+            except OSError as exc:  # local paths and file:// URLs
+                raise DownloadError(f"cannot read {url}: {exc}") from None
         got = sha256_file(tmp)
         if got != sha256:
             raise DownloadError(
                 f"hash mismatch for {filename}: expected {sha256}, got {got}",
                 hint=f"source: {url}",
             )
-        os.replace(tmp, dest)
+        try:
+            os.replace(tmp, dest)
+        except PermissionError:
+            # another process holds the finished file open (Windows); it has
+            # the same verified content
+            if not dest.is_file():
+                raise
     finally:
         tmp.unlink(missing_ok=True)
     return dest

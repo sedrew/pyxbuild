@@ -50,6 +50,19 @@ class _Destination(SchemeDictionaryDestination):
 
     target = "win_amd64"
 
+    def write_to_fs(self, scheme: Scheme, path: str, stream, is_executable: bool):
+        # Defence in depth (installer >= 1.0 checks this too): a wheel entry
+        # must stay inside its scheme directory.
+        parts = PurePosixPath(path.replace("\\", "/")).parts
+        if (not parts or ".." in parts or path.startswith(("/", "\\"))
+                or ":" in path):
+            raise PyxbuildError(f"refusing wheel entry outside the install folder: {path!r}")
+        root = Path(self.scheme_dict[scheme]).resolve()
+        target = (root / path).resolve()
+        if not target.is_relative_to(root):
+            raise PyxbuildError(f"refusing wheel entry outside the install folder: {path!r}")
+        return super().write_to_fs(scheme, path, stream, is_executable)
+
     def write_script(self, name: str, module: str, attr: str, section: str) -> RecordEntry:
         """Console/GUI scripts of installed packages use pyxbuild's own launcher.
 
@@ -57,8 +70,11 @@ class _Destination(SchemeDictionaryDestination):
         interpreter path; ours finds ``..\\python.exe`` relative to itself,
         so ``runtime\\Scripts\\*.exe`` keep working wherever the app is unpacked.
         """
-        from .config import EntryPoint
+        from .config import _SCRIPT_NAME_RE, EntryPoint
         from .launcher import build_launcher
+
+        if not _SCRIPT_NAME_RE.match(name):
+            raise PyxbuildError(f"invalid console script name {name!r} in a wheel")
 
         entry = EntryPoint(name=name, module=module, attr=attr, gui=section == "gui")
         data = build_launcher(entry, self.target, python_rel="..")

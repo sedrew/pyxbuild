@@ -66,8 +66,11 @@ class Target:
         v = Version(python_version)
         py = (v.major, v.minor)
         interpreter = f"cp{v.major}{v.minor}"
+        # explicit abis: otherwise packaging adds "t"/"d" ABIs when pyxbuild
+        # itself runs on a free-threaded or debug interpreter
+        abis = [interpreter, "abi3", "none"]
         return [
-            *cpython_tags(py, platforms=[self.name]),
+            *cpython_tags(py, abis=abis, platforms=[self.name]),
             *compatible_tags(py, interpreter=interpreter, platforms=[self.name]),
         ]
 

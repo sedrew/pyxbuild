@@ -285,3 +285,17 @@ def test_bytecode_app_runs_from_read_only_folder(tmp_path, shared_cache):
     finally:
         for p in [app, *app.rglob("*")]:
             p.chmod(p.stat().st_mode | 0o200)
+
+
+def test_external_pep751_lock_is_used_and_never_overwritten(tmp_path, shared_cache):
+    proj = copy_project("hello", tmp_path)
+    build(proj, shared_cache, "--python", "3.12")
+    ours = (proj / "pylock.win_amd64.toml").read_text()
+    foreign = ours.split("\n[tool.pyxbuild]")[0].replace("created-by = \"uv\"",
+                                                          "created-by = \"pdm\"") + "\n"
+    (proj / "pylock.win_amd64.toml").write_text(foreign)
+    build(proj, shared_cache, "--python", "3.12")
+    assert (proj / "pylock.win_amd64.toml").read_text() == foreign
+    with env_vars(PYXBUILD_CACHE_DIR=str(shared_cache)):
+        assert cli.main(["build", str(proj), "-q", "--python", "3.12", "--relock"]) == 1
+    assert (proj / "pylock.win_amd64.toml").read_text() == foreign

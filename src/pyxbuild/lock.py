@@ -11,10 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import tomllib
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -31,6 +33,15 @@ from .errors import ResolveError
 from .targets import Target
 
 LOCK_TOOL_TABLE = "tool.pyxbuild"
+
+# uv settings that change a resolution; the lock records pyxbuild's own
+# inputs only, so these must not leak in from the environment
+UV_RESOLUTION_ENV = frozenset({
+    "UV_PYTHON", "UV_INDEX", "UV_INDEX_URL", "UV_DEFAULT_INDEX", "UV_EXTRA_INDEX_URL",
+    "UV_FIND_LINKS", "UV_NO_INDEX", "UV_CONSTRAINT", "UV_OVERRIDE", "UV_BUILD_CONSTRAINT",
+    "UV_EXCLUDE_NEWER", "UV_PRERELEASE", "UV_RESOLUTION", "UV_NO_BINARY", "UV_ONLY_BINARY",
+    "UV_NO_BUILD", "UV_INDEX_STRATEGY", "UV_TORCH_BACKEND", "UV_CONFIG_FILE",
+})
 
 
 def uv_executable() -> str:
@@ -60,6 +71,9 @@ class LockInputs:
     extra_index_urls: tuple[str, ...]
     allow_sdist: bool
     find_links: tuple[str, ...] = ()
+    find_links_key: tuple[str, ...] = ()
+    """find-links as written in the config: the digest must not depend on where
+    the project is checked out."""
     no_binary: tuple[str, ...] = ()
 
     def digest(self) -> str:
@@ -71,7 +85,7 @@ class LockInputs:
                 "index-url": self.index_url,
                 "extra-index-urls": list(self.extra_index_urls),
                 "allow-sdist": self.allow_sdist,
-                "find-links": list(self.find_links),
+                "find-links": list(self.find_links_key or self.find_links),
                 "no-binary": sorted(self.no_binary),
             },
             sort_keys=True,
@@ -109,22 +123,39 @@ class Lock:
 
 
 def requirement_lines(requires_dist: list[str], target: Target, env: dict[str, str],
-                      extras: list[str]) -> list[str]:
+                      extras: list[str], project: str | None = None) -> list[str]:
     """Turn ``Requires-Dist`` of the project into resolver input for the target.
 
     Markers are evaluated against the *target* environment (never the host);
     requirements gated by extras are kept only for the extras requested.
     """
-    out = []
-    wanted = {canonicalize_name(e) for e in extras} | {""}
+    reqs = []
     for line in requires_dist:
         try:
-            req = Requirement(line)
+            reqs.append(Requirement(line))
         except InvalidRequirement as exc:
             raise ResolveError(f"invalid requirement {line!r}: {exc}") from None
-        if req.marker is not None and not any(
-            req.marker.evaluate({**env, "extra": e}) for e in wanted
-        ):
+    own = canonicalize_name(project) if project else None
+    wanted = {canonicalize_name(e) for e in extras} | {""}
+
+    def applies(req: Requirement) -> bool:
+        return req.marker is None or any(req.marker.evaluate({**env, "extra": e})
+                                         for e in wanted)
+
+    # "myapp[gui]; extra == 'all'" refers to the project itself: add its
+    # extras to the wanted set instead of asking the index for "myapp"
+    changed = True
+    while changed and own:
+        changed = False
+        for req in reqs:
+            if canonicalize_name(req.name) == own and applies(req):
+                new = {canonicalize_name(e) for e in req.extras} - wanted
+                if new:
+                    wanted |= new
+                    changed = True
+    out = []
+    for req in reqs:
+        if canonicalize_name(req.name) == own or not applies(req):
             continue
         req.marker = None
         out.append(str(req))
@@ -159,9 +190,10 @@ def compile_lock(inputs: LockInputs, target: Target, python_full_version: str,
             cmd += ["--no-binary", name]
         if quiet:
             cmd.append("--quiet")
-        env = {**os.environ, "UV_NO_PROGRESS": "1"}
-        env.pop("UV_PYTHON", None)
-        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+        cmd.append("--no-config")  # no uv.toml / [tool.uv] from the user or cwd
+        env = {k: v for k, v in os.environ.items() if k not in UV_RESOLUTION_ENV}
+        env["UV_NO_PROGRESS"] = "1"
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tmp)
         if proc.returncode != 0:
             raise ResolveError(
                 f"cannot resolve dependencies for {target.name} / Python {python_full_version}:\n"
@@ -169,6 +201,7 @@ def compile_lock(inputs: LockInputs, target: Target, python_full_version: str,
                 hint=_resolve_hint(proc.stderr, inputs),
             )
         text = raw.read_text(encoding="utf-8") if raw.exists() else 'lock-version = "1.0"\n'
+    text = _localize_files(text, out.parent)
     out.write_text(_annotate(text, inputs, target, python_full_version), encoding="utf-8",
                    newline="\n")  # same lock bytes on every OS
 
@@ -229,6 +262,31 @@ def _annotate(text: str, inputs: LockInputs, target: Target, python_full_version
         f"resolver = {_toml_str(_uv_version())}",
     ]
     return "\n".join(header + out + tool) + "\n"
+
+
+_LOCAL_FILE_RE = re.compile(
+    r'url = "file://(?P<path>[^"]+)"(?P<mid>[^{}]*?)hashes = \{\s*\}')
+
+
+def _localize_files(text: str, lock_dir: Path) -> str:
+    """Make local find-links files portable and verifiable.
+
+    uv records them as ``url = "file:///abs/path"`` with empty hashes. Files
+    below the lock's directory become relative ``path`` entries (PEP 751)
+    and every local file gets its sha256, so the lock works on any checkout
+    and the files are verified like downloads.
+    """
+    def repl(m: re.Match[str]) -> str:
+        local = Path(urllib.request.url2pathname(m["path"]))
+        digest = hashlib.sha256(local.read_bytes()).hexdigest() if local.is_file() else None
+        try:
+            ref = f'path = "{local.resolve().relative_to(lock_dir.resolve()).as_posix()}"'
+        except ValueError:
+            ref = f'url = "file://{m["path"]}"'
+        hashes = f'hashes = {{ sha256 = "{digest}" }}' if digest else "hashes = {}"
+        return ref + m["mid"] + hashes
+
+    return _LOCAL_FILE_RE.sub(repl, text)
 
 
 def _uv_version() -> str:

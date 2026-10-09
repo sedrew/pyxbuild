@@ -77,6 +77,8 @@ class ProjectConfig:
     index_url: str | None = None
     extra_index_urls: list[str] = field(default_factory=list)
     find_links: list[str] = field(default_factory=list)
+    """Absolute locations for uv; ``find_links_cfg`` keeps them as written."""
+    find_links_cfg: list[str] = field(default_factory=list)
     allow_sdist: bool = False
     slim: list[str] = field(default_factory=lambda: ["tests", "idle", "ensurepip",
                                                      "turtledemo", "lib2to3"])
@@ -322,6 +324,8 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
             )
     if "find-links" in tool:
         # relative directories are relative to the project, like other paths
+        cfg.find_links_cfg = [v.replace("\\", "/") for v in _str_list(tool["find-links"],
+                                                                     "find-links")]
         cfg.find_links = [
             v if "://" in v else str((root / v).resolve())
             for v in _str_list(tool["find-links"], "find-links")

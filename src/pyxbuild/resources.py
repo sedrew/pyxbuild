@@ -78,6 +78,8 @@ def read_ico(path: Path) -> list[IconImage]:
     reserved, kind, count = struct.unpack_from("<HHH", raw)
     if reserved != 0 or kind != 1 or count == 0:
         raise ConfigError(f"{path} is not an .ico file", hint="convert PNG/SVG to .ico first")
+    if len(raw) < 6 + 16 * count:
+        raise ConfigError(f"{path} is truncated")
     images = []
     for i in range(count):
         w, h, colors, _, planes, bitcount, size, offset = struct.unpack_from(

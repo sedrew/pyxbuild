@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from .errors import PyxbuildError
@@ -24,32 +25,44 @@ def _tool() -> tuple[str, str]:
 def sign_file(path: Path, cert: Path, *, password: str | None = None,
               timestamp_url: str | None = None, description: str | None = None,
               url: str | None = None) -> None:
-    """Sign ``path`` in place with a PKCS#12 certificate (``.pfx``/``.p12``)."""
+    """Sign ``path`` in place with a PKCS#12 certificate (``.pfx``/``.p12``).
+
+    The password never appears on a command line (visible to other users via
+    the process list): osslsigncode reads it from a private file, jsign from
+    an environment variable.
+    """
     kind, exe = _tool()
     tmp = path.with_name(path.name + ".signed")
-    if kind == "osslsigncode":
-        cmd = [exe, "sign", "-pkcs12", str(cert), "-h", "sha256"]
-        if password is not None:
-            cmd += ["-pass", password]
-        if description:
-            cmd += ["-n", description]
-        if url:
-            cmd += ["-i", url]
-        if timestamp_url:
-            cmd += ["-ts", timestamp_url]
-        cmd += ["-in", str(path), "-out", str(tmp)]
-    else:
-        cmd = [exe, "--keystore", str(cert), "--storetype", "PKCS12", "--alg", "SHA-256"]
-        if password is not None:
-            cmd += ["--storepass", password]
-        if description:
-            cmd += ["--name", description]
-        if url:
-            cmd += ["--url", url]
-        if timestamp_url:
-            cmd += ["--tsaurl", timestamp_url]
-        cmd.append(str(path))
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    env = dict(os.environ)
+    with tempfile.TemporaryDirectory(prefix="pyxbuild-sign-") as private:
+        if kind == "osslsigncode":
+            cmd = [exe, "sign", "-pkcs12", str(cert), "-h", "sha256"]
+            if password is not None:
+                pass_file = Path(private) / "pass"
+                fd = os.open(pass_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(password)
+                cmd += ["-readpass", str(pass_file)]
+            if description:
+                cmd += ["-n", description]
+            if url:
+                cmd += ["-i", url]
+            if timestamp_url:
+                cmd += ["-ts", timestamp_url]
+            cmd += ["-in", str(path), "-out", str(tmp)]
+        else:
+            cmd = [exe, "--keystore", str(cert), "--storetype", "PKCS12", "--alg", "SHA-256"]
+            if password is not None:
+                env["PYXBUILD_SIGN_PASSWORD"] = password
+                cmd += ["--storepass", "env:PYXBUILD_SIGN_PASSWORD"]
+            if description:
+                cmd += ["--name", description]
+            if url:
+                cmd += ["--url", url]
+            if timestamp_url:
+                cmd += ["--tsaurl", timestamp_url]
+            cmd.append(str(path))
+        proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if proc.returncode != 0:
         tmp.unlink(missing_ok=True)
         raise PyxbuildError(f"signing {path.name} failed:\n{(proc.stderr or proc.stdout).strip()}")

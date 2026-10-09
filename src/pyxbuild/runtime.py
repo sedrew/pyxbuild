@@ -94,9 +94,16 @@ def get_runtime(target: Target, python: str, *, quiet: bool = False) -> Runtime:
             _safe_extract(archive, tmp)
             if not (tmp / "python" / f"python{target.exe_suffix}").is_file():
                 raise PyxbuildError(f"{spec.file} does not contain python/python.exe")
-            if root.exists():
-                shutil.rmtree(root)
-            os.replace(tmp, root)
+            if (python_dir / f"python{target.exe_suffix}").is_file():
+                pass  # another build finished first; never delete a runtime in use
+            else:
+                if root.exists():
+                    shutil.rmtree(root)  # an incomplete earlier extraction
+                try:
+                    os.replace(tmp, root)
+                except OSError:
+                    if not (python_dir / f"python{target.exe_suffix}").is_file():
+                        raise
         finally:
             if tmp.exists():
                 shutil.rmtree(tmp)

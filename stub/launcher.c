@@ -181,14 +181,13 @@ static wchar_t *manifest_get(const char *payload, const char *key) {
     return NULL;
 }
 
-/* Skip argv[0] using the same rules as the MSVC runtime. */
+/* Skip argv[0] with the UCRT's rules: quotes toggle, there are no escapes in
+ * the program name, and the name ends at the first unquoted blank. */
 static const wchar_t *skip_program_name(const wchar_t *cmd) {
-    if (*cmd == L'"') {
+    BOOL quoted = FALSE;
+    while (*cmd && (quoted || (*cmd != L' ' && *cmd != L'\t'))) {
+        if (*cmd == L'"') quoted = !quoted;
         cmd++;
-        while (*cmd && *cmd != L'"') cmd++;
-        if (*cmd == L'"') cmd++;
-    } else {
-        while (*cmd && *cmd != L' ' && *cmd != L'\t') cmd++;
     }
     while (*cmd == L' ' || *cmd == L'\t') cmd++;
     return cmd;
@@ -315,11 +314,24 @@ static int run(void) {
         si.hStdOutput = inheritable(GetStdHandle(STD_OUTPUT_HANDLE));
         si.hStdError = inheritable(GetStdHandle(STD_ERROR_HANDLE));
     }
-    if (!CreateProcessW(interp, cmdline, NULL, NULL, TRUE, 0, NULL, NULL, &si,
-                        &pi))
+    /* Start suspended so the child is in the job before it runs: if the
+     * launcher dies, the job closes and takes the child with it. */
+    if (!CreateProcessW(interp, cmdline, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL,
+                        NULL, &si, &pi))
         fail(L"cannot start the Python runtime", interp);
     if (job) AssignProcessToJobObject(job, pi.hProcess);
+    ResumeThread(pi.hThread);
     CloseHandle(pi.hThread);
+#ifdef PYX_GUI
+    {
+        /* Explorer shows the "app starting" cursor until the launched process
+         * takes a message from its queue; ours never would (CPython's
+         * launcher does the same, bpo-17290). */
+        MSG msg;
+        PostMessageW(NULL, 0, 0, 0);
+        GetMessageW(&msg, NULL, 0, 0);
+    }
+#endif
     WaitForSingleObject(pi.hProcess, INFINITE);
     if (!GetExitCodeProcess(pi.hProcess, &exit_code)) exit_code = 1;
     CloseHandle(pi.hProcess);

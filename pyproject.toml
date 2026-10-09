@@ -21,7 +21,7 @@ classifiers = [
 ]
 dependencies = [
     "packaging>=24.2",
-    "installer>=0.7",
+    "installer>=1.0.1",  # 1.0 refuses wheel entries outside the target
     "uv>=0.8",
 ]
 

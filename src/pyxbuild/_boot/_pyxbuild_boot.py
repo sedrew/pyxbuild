@@ -48,6 +48,7 @@ def _gui_streams(log_path):
                       errors="backslashreplace")
     except OSError:
         stream = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
+        log_path = None  # do not point the user at a file that was not written
     if sys.stdout is None:
         sys.stdout = stream
     if sys.stderr is None:
