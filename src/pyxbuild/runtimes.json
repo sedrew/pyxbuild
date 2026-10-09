@@ -1,0 +1,30 @@
+{
+  "source": "python-build-standalone",
+  "release": "20260718",
+  "base_url": "https://github.com/astral-sh/python-build-standalone/releases/download",
+  "flavor": "install_only_stripped",
+  "runtimes": {
+    "win_amd64": {
+      "3.11": {
+        "version": "3.11.15",
+        "file": "cpython-3.11.15+20260718-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "sha256": "a48c2dbe832319f61aa8557c9900caec70f7fed0cbee391a4c9ff9f98b50222d"
+      },
+      "3.12": {
+        "version": "3.12.13",
+        "file": "cpython-3.12.13+20260718-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "sha256": "0d422a1439ec308e03f47df551bc30f5994727c456e414b026d202bcda9b7c1c"
+      },
+      "3.13": {
+        "version": "3.13.14",
+        "file": "cpython-3.13.14+20260718-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "sha256": "91ea0cd883295458fa766eae36241df3ecc21f7029814189707d54b450e55c69"
+      },
+      "3.14": {
+        "version": "3.14.6",
+        "file": "cpython-3.14.6+20260718-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
+        "sha256": "0c5c9f231704fb49149bc8f2b9d9dbe43eeaf6c54f362ef0fc2066ce64b4d10f"
+      }
+    }
+  }
+}

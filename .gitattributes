@@ -1,0 +1,2 @@
+*.exe binary
+src/pyxbuild/_stubs/*.exe binary
