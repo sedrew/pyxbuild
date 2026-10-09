@@ -37,6 +37,12 @@ tests skip `Tk()` windows and run Qt with `QT_QPA_PLATFORM=offscreen`.
 | — | `tests/golden/features` | stdlib only: metadata, resources, sqlite/ssl/ctypes/lzma, Tcl, multiprocessing, isolation, UTF-8 mode, GUI script | 3.11–3.14 |
 | 1 | `tests/golden/level1` | numpy, pandas, Pillow, requests+certifi, lxml, cryptography, pydantic, tkinter | 3.11–3.14 |
 | 2 | `tests/golden/level2` | matplotlib, scipy, pywin32, psutil, orjson, pyzmq, opencv-python-headless, PySide6 | 3.12, 3.13 |
+| 3 | `tests/golden/level3` | torch (CPU) + msvc-runtime; CI only (Wine lacks NUMA APIs OpenMP needs) | 3.12 |
+| 3 | `tests/test_sdist.py` | pure-Python sdist (needs `allow-sdist`), sdist with C code (refused) | 3.12 |
+
+The wider [compatibility matrix](COMPATIBILITY.md) (`tools/compat_matrix.py`)
+builds one app per package for 38 packages with compiled code on Python
+3.11–3.14 and runs each smoke test.
 
 Each golden app prints `OK <check>` / `FAIL <check>: traceback` and exits
 non-zero on any failure. Override the Python matrix with
@@ -44,4 +50,4 @@ non-zero on any failure. Override the Python matrix with
 
 Not covered yet: a clean Windows without the VC++ Redistributable (GitHub's
 windows-latest has it installed; the doctor's static check stands in), and
-level 3 (torch, playwright, sdist-only packages).
+playwright (doctor warning only).

@@ -57,6 +57,12 @@ lock = "pylock.toml"       # default: pylock.win_amd64.toml
 exclude = ["tests/", "*.pyi"]
 zip = true
 utf8-mode = false          # run the app with -X utf8
+icon = "assets/app.ico"    # launcher icon; VERSIONINFO comes from [project]
+find-links = ["wheels/"]   # extra local wheels (e.g. built in CI)
+
+[tool.pyxbuild.version-info]
+company-name = "ACME"
+copyright = "(c) 2026 ACME"
 ```
 
 ```console
@@ -75,10 +81,14 @@ Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
   index. `pyxbuild doctor` lists the ones that do not. Pure-Python sdists can
   be allowed with `allow-sdist = true`; sdists with C code are refused.
 * The project itself must be pure Python.
+* Some wheels need Visual C++ runtime DLLs that Windows does not ship
+  (torch, ...). `pyxbuild doctor` lists them; add `msvc-runtime` to the
+  dependencies to bundle them.
 * Only the folder mode and the `win_amd64` target exist so far.
 
-See [docs/DESIGN.md](docs/DESIGN.md), [docs/TESTING.md](docs/TESTING.md) and
-[docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md).
+See [docs/DESIGN.md](docs/DESIGN.md), [docs/TESTING.md](docs/TESTING.md),
+[docs/COMPATIBILITY.md](docs/COMPATIBILITY.md) (38 packages with compiled code ×
+Python 3.11–3.14) and [docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md).
 
 [python-build-standalone]: https://github.com/astral-sh/python-build-standalone
 

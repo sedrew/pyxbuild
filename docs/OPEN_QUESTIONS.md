@@ -46,10 +46,12 @@ later.
     the stub, publishing hashes) is not defined. The skeptic's conditions
     (budget for signing the stub, antivirus false-positive plan) are open.
 12. **VC++ runtime DLLs**: PBS ships `vcruntime140.dll`/`vcruntime140_1.dll`;
-    `msvcp140.dll`, `concrt140.dll`, `mfc140u.dll` are not shipped. Bundling
-    them needs a redistribution decision (licence) and a source (the
-    `msvc-runtime` package on PyPI is one option). Today the doctor reports
-    them.
+    `msvcp140*.dll`, `vcruntime140_threads.dll`, `concrt140.dll`,
+    `mfc140u.dll` are not shipped. The doctor reports them and suggests the
+    `msvc-runtime` package from PyPI (works: it installs the DLLs next to
+    `python.exe`; verified with torch). Should pyxbuild add it automatically
+    when the doctor finds VC++ imports (needs a licence decision — it is
+    Microsoft's redistributable, packaged by a third party), or stay opt-in?
 
 ## Testing
 
