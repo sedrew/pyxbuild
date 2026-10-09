@@ -1,0 +1,148 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"
+  UV_NO_PROGRESS: "1"
+
+jobs:
+  unit:
+    name: unit (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+        python: ["3.11", "3.14"]
+        include:
+          - { os: ubuntu-latest, python: "3.12" }
+          - { os: ubuntu-latest, python: "3.13" }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e ".[dev,stubs]"
+      - run: ruff check .
+      - run: python -m pytest -m "not slow" -ra
+
+  stubs:
+    name: launcher stubs are reproducible (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ziglang
+      - run: python tools/build_stubs.py --check
+
+  build-golden:
+    name: build golden apps on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - run: python tools/golden.py build --out golden-out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: golden-${{ matrix.os }}
+          path: golden-out
+          retention-days: 7
+
+  reproducibility:
+    name: identical output on every build host
+    needs: build-golden
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: compare SHA256SUMS
+        run: |
+          for f in artifacts/*/SHA256SUMS; do echo "== $f"; cat "$f"; done
+          diff artifacts/golden-ubuntu-latest/SHA256SUMS artifacts/golden-macos-14/SHA256SUMS
+          diff artifacts/golden-ubuntu-latest/SHA256SUMS artifacts/golden-windows-latest/SHA256SUMS
+
+  run-on-windows:
+    name: run apps built on ${{ matrix.built-on }} on windows-latest
+    needs: build-golden
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        built-on: [ubuntu-latest, macos-14]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: golden-${{ matrix.built-on }}
+          path: golden-out
+      - name: run with no Python on PATH
+        shell: pwsh
+        run: |
+          $py = (Get-Command python).Source
+          $env:Path = ($env:Path -split ';' | Where-Object { $_ -notmatch 'Python|pipx|hostedtoolcache' }) -join ';'
+          if (Get-Command python -ErrorAction SilentlyContinue) { Write-Host "note: a python is still on PATH" }
+          & $py tools/golden.py run golden-out
+
+  compare-with-pip:
+    name: same files as pip install (py${{ matrix.python }})
+    needs: build-golden
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install packaging installer
+      - uses: actions/download-artifact@v4
+        with:
+          name: golden-macos-14
+          path: golden-out
+      - run: python tools/compare_with_pip.py golden-out/level1-py${{ matrix.python }}.zip golden-out/level1-py${{ matrix.python }}.pylock.toml
+      - run: python tools/compare_with_pip.py golden-out/level2-py${{ matrix.python }}.zip golden-out/level2-py${{ matrix.python }}.pylock.toml
+
+  e2e:
+    name: e2e on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - name: install Wine and osslsigncode
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q && sudo apt-get install -yq osslsigncode
+          eval "$(tools/get_wine.sh)"
+          echo "PYXBUILD_WINE=$PYXBUILD_WINE" >> "$GITHUB_ENV"
+      - run: python -m pytest -m "slow and not golden" -ra

@@ -1,2 +1,5 @@
+# Byte-identical builds on every host need identical inputs: keep LF everywhere.
+* text=auto eol=lf
 *.exe binary
-src/pyxbuild/_stubs/*.exe binary
+*.ico binary
+*.png binary

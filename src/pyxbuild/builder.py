@@ -83,8 +83,9 @@ def source_date_epoch() -> int:
         return DEFAULT_EPOCH
 
 
-def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path) -> TargetBuild:
-    """Everything up to (and including) downloading wheels; no output written."""
+def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
+            *, download: bool = True) -> TargetBuild:
+    """Everything up to (and including) downloading wheels; writes only the lock file."""
     python = opts.python or cfg.choose_python()
     _log(opts, f"[{target.name}] Python {python} runtime ({cfg.runtime})")
     runtime = get_runtime(target, python, quiet=opts.quiet)
@@ -121,7 +122,7 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path) 
                               allow_sdist=cfg.allow_sdist)
 
     tb = TargetBuild(target, python, runtime, env, wheel, lock_path)
-    for sel in selections:
+    for sel in selections if download else []:
         path = fetch(_absolute_url(sel.file.url, lock_path), sel.file.sha256, sel.file.name,
                      quiet=opts.quiet)
         if not sel.is_wheel:
@@ -241,8 +242,13 @@ def build(cfg: ProjectConfig, opts: BuildOptions | None = None) -> list[BuildRes
             tb = prepare(cfg, target, opts, work)
             staging = work / "app"
             launchers, report = assemble(cfg, tb, staging, opts)
-            if report.findings:
-                _log(opts, f"[{target.name}] bundle check:\n{report.format()}")
+            shown = [f for f in report.findings if f.level != doctor.INFO]
+            if shown:
+                _log(opts, f"[{target.name}] bundle check:\n"
+                     f"{doctor.Report(shown).format()}")
+            if len(shown) < len(report.findings):
+                _log(opts, f"[{target.name}] {len(report.findings) - len(shown)} informational "
+                     f"note(s); run `pyxbuild doctor` to see them")
             if report.errors and opts.strict:
                 raise PyxbuildError(
                     f"bundle check found {len(report.errors)} error(s)",
@@ -269,7 +275,7 @@ def lock_only(cfg: ProjectConfig, opts: BuildOptions) -> list[Path]:
     for target_name in opts.targets or cfg.targets:
         target = get_target(target_name)
         with tempfile.TemporaryDirectory(prefix="pyxbuild-") as tmp:
-            tb = prepare(cfg, target, opts, Path(tmp))
+            tb = prepare(cfg, target, opts, Path(tmp), download=False)
         paths.append(tb.lock_path)
     return paths
 
