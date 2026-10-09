@@ -17,3 +17,8 @@ features-gui = "features.main:gui"
 [tool.pyxbuild]
 exclude = ["*.pyi"]
 utf8-mode = true
+icon = "app.ico"
+
+[tool.pyxbuild.version-info]
+company-name = "pyxbuild tests"
+copyright = "(c) 2026"

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from . import __version__, doctor
 from .config import ProjectConfig
-from .download import fetch
+from .download import fetch, offline_mode
 from .errors import PyxbuildError, ResolveError
 from .install import Excluder, apply_excludes, install_wheel
 from .launcher import build_launcher
@@ -25,6 +25,7 @@ from .lock import (
     select_files,
 )
 from .project import BuiltWheel, build_wheel
+from .resources import launcher_resources
 from .runtime import Runtime, get_runtime
 from .targets import Target, get_target
 
@@ -46,6 +47,8 @@ class BuildOptions:
     """Re-resolve even if the lock file is up to date."""
     out_dir: Path | None = None
     quiet: bool = False
+    offline: bool = False
+    """Use only the download cache (implies ``frozen``)."""
     strict: bool = False
     """Fail the build when the bundle check reports errors."""
 
@@ -205,8 +208,13 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     if launchers:
         for entry in cfg.entry_points:
             exe = app_dir / f"{entry.name}{tb.target.exe_suffix}"
+            res = launcher_resources(
+                script=entry.name, project_name=tb.project_wheel.name,
+                version=tb.project_wheel.version, description=tb.project_wheel.summary,
+                version_info_cfg=cfg.version_info, icon=cfg.icon,
+            )
             exe.write_bytes(build_launcher(entry, tb.target.name, python_rel=RUNTIME_DIR,
-                                           utf8_mode=cfg.utf8_mode))
+                                           utf8_mode=cfg.utf8_mode, resources=res))
             created.append(exe)
 
     info = {
@@ -228,6 +236,14 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
 
 def build(cfg: ProjectConfig, opts: BuildOptions | None = None) -> list[BuildResult]:
     opts = opts or BuildOptions()
+    if opts.offline:
+        opts.frozen = True
+        with offline_mode():
+            return _build(cfg, opts)
+    return _build(cfg, opts)
+
+
+def _build(cfg: ProjectConfig, opts: BuildOptions) -> list[BuildResult]:
     mode = opts.mode or cfg.mode
     if mode != "folder":
         raise PyxbuildError(f"mode {mode!r} is not implemented yet",

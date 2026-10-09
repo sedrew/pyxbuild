@@ -88,7 +88,9 @@ def decode_manifest(exe: bytes) -> dict[str, str]:
 
 
 def build_launcher(entry: EntryPoint, target: str, *, python_rel: str,
-                   utf8_mode: bool = False) -> bytes:
+                   utf8_mode: bool = False,
+                   resources: dict[int, dict[int, bytes]] | None = None) -> bytes:
+    """Stub (+ optional PE resources) + manifest for one entry point."""
     interpreter = python_rel + ("\\pythonw.exe" if entry.gui else "\\python.exe")
     fields = {
         "python": interpreter,
@@ -96,4 +98,9 @@ def build_launcher(entry: EntryPoint, target: str, *, python_rel: str,
         "code": bootstrap_code(entry),
         "entry-point": f"{entry.module}:{entry.attr}",
     }
-    return stub_bytes(target, entry.gui) + encode_manifest(fields)
+    stub = stub_bytes(target, entry.gui)
+    if resources:
+        from .resources import add_resources
+
+        stub = add_resources(stub, resources)
+    return stub + encode_manifest(fields)

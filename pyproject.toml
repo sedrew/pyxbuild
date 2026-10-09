@@ -26,7 +26,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "pefile>=2023.2.7"]
 stubs = ["ziglang==0.16.0"]
 
 [project.scripts]

@@ -10,6 +10,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 
 from . import __version__
@@ -38,8 +39,22 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+_offline_override = False
+
+
+@contextmanager
+def offline_mode(enabled: bool = True):
+    """Forbid downloads inside the block (``--offline``) without touching os.environ."""
+    global _offline_override
+    previous, _offline_override = _offline_override, enabled
+    try:
+        yield
+    finally:
+        _offline_override = previous
+
+
 def offline() -> bool:
-    return os.environ.get("PYXBUILD_OFFLINE", "") not in ("", "0")
+    return _offline_override or os.environ.get("PYXBUILD_OFFLINE", "") not in ("", "0")
 
 
 def fetch(url: str, sha256: str, filename: str, *, quiet: bool = False) -> Path:

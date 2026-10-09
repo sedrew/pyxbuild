@@ -119,7 +119,10 @@ def run():
 
         signal.signal(signal.SIGBREAK, on_break)
         print("READY", flush=True)
-        time.sleep(60)
+        # short sleeps: on Windows only SIGINT interrupts time.sleep, so a
+        # SIGBREAK handler runs when the current sleep returns
+        for _ in range(600):
+            time.sleep(0.1)
         return 1
     return 1 if _run_checks(sys.stdout) else 0
 

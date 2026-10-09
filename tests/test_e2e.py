@@ -116,6 +116,19 @@ def test_app_folder_can_be_moved(hello_app, tmp_path):
     assert "argv ['x']" in proc.stdout
 
 
+def test_features_launchers_have_icon_and_version(features_app):
+    pefile = pytest.importorskip("pefile")
+    for name in ("features.exe", "features-gui.exe"):
+        p = pefile.PE(str(features_app / name))
+        strings = {k.decode(): v.decode() for fi in p.FileInfo[0] if fi.Key == b"StringFileInfo"
+                   for st in fi.StringTable for k, v in st.entries.items()}
+        assert strings["CompanyName"] == "pyxbuild tests"
+        assert strings["FileVersion"] == "0.3.0"
+        assert strings["OriginalFilename"] == name
+        types = {e.id for e in p.DIRECTORY_ENTRY_RESOURCE.entries}
+        assert {3, 14, 16, 24} <= types
+
+
 @needs_runner
 def test_features_console(features_app):
     proc = run_exe(features_app / "features.exe", timeout=900)

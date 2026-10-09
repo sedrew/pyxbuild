@@ -22,16 +22,17 @@ class BuiltWheel:
     version: str
     requires_dist: list[str]
     is_pure: bool
+    summary: str | None = None
 
 
-def read_wheel_metadata(path: Path) -> tuple[str, str, list[str]]:
+def read_wheel_metadata(path: Path) -> tuple[str, str, list[str], str | None]:
     with zipfile.ZipFile(path) as zf:
         meta_name = next((n for n in zf.namelist()
                           if n.endswith(".dist-info/METADATA") and n.count("/") == 1), None)
         if meta_name is None:
             raise PyxbuildError(f"{path.name} has no .dist-info/METADATA")
         msg = email.parser.BytesParser().parsebytes(zf.read(meta_name), headersonly=True)
-    return msg["Name"], msg["Version"], msg.get_all("Requires-Dist") or []
+    return msg["Name"], msg["Version"], msg.get_all("Requires-Dist") or [], msg["Summary"]
 
 
 def build_wheel(source: Path, out_dir: Path, *, quiet: bool = False) -> BuiltWheel:
@@ -56,5 +57,5 @@ def build_wheel(source: Path, out_dir: Path, *, quiet: bool = False) -> BuiltWhe
     wheel = max(built, key=lambda p: p.stat().st_mtime)
     _, _, _, tags = parse_wheel_filename(wheel.name)
     pure = all(t.abi == "none" and t.platform == "any" for t in tags)
-    name, version, requires = read_wheel_metadata(wheel)
-    return BuiltWheel(wheel, name, version, requires, pure)
+    name, version, requires, summary = read_wheel_metadata(wheel)
+    return BuiltWheel(wheel, name, version, requires, pure, summary)

@@ -69,10 +69,9 @@ def _options(args: argparse.Namespace):
         opts.zip = args.zip
         opts.out_dir = args.out
         opts.frozen = args.frozen or args.offline
+        opts.offline = args.offline
         opts.relock = args.relock
         opts.strict = args.strict
-        if args.offline:
-            os.environ["PYXBUILD_OFFLINE"] = "1"
     return opts
 
 
