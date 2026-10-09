@@ -134,10 +134,12 @@ def test_features_launchers_have_icon_and_version(features_app):
 
 @needs_runner
 def test_features_console(features_app):
-    proc = run_exe(features_app / "features.exe", timeout=900)
+    # a Tcl from another installation must not break the bundled one
+    proc = run_exe(features_app / "features.exe", timeout=900,
+                   env={"TCL_LIBRARY": "C:\\Python27\\tcl\\tcl8.5"})
     assert "FAIL" not in proc.stdout, proc.stdout + proc.stderr
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    for name in ("argv", "utf8_mode", "isolation", "metadata", "resources",
+    for name in ("argv", "boot_env", "utf8_mode", "isolation", "metadata", "resources",
                  "stdlib_extensions", "tcl", "subprocess_python", "multiprocessing"):
         assert f"OK {name}" in proc.stdout
 

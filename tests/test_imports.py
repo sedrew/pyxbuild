@@ -100,3 +100,14 @@ def test_pth_directories_count_as_available(runtime):
     (site / "win32" / "lib" / "pywintypes.py").write_text("")
     (site / "pywin32.pth").write_text("# comment\nwin32\nwin32\\lib\nimport pywin32_bootstrap\n")
     assert {"win32api", "pywintypes"} <= available_modules(runtime)
+
+
+def test_zoneinfo_without_tzdata(tmp_path, runtime):
+    (runtime / "Lib" / "zoneinfo").mkdir()
+    report = doctor.Report()
+    check_imports(runtime, project(tmp_path, "from zoneinfo import ZoneInfo\n"), report)
+    assert any("tzdata" in f.message for f in report.findings)
+    (runtime / "Lib" / "site-packages" / "tzdata").mkdir()
+    report = doctor.Report()
+    check_imports(runtime, project(tmp_path / "2", "import zoneinfo\n"), report)
+    assert report.findings == []

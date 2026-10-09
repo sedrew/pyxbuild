@@ -226,8 +226,17 @@ def _annotate(text: str, inputs: LockInputs, target: Target, python_full_version
         f"python = {_toml_str(python_full_version)}",
         f"inputs-sha256 = {_toml_str(inputs.digest())}",
         "requirements = [" + ", ".join(_toml_str(r) for r in sorted(inputs.requirements)) + "]",
+        f"resolver = {_toml_str(_uv_version())}",
     ]
     return "\n".join(header + out + tool) + "\n"
+
+
+def _uv_version() -> str:
+    try:
+        out = subprocess.run([uv_executable(), "--version"], capture_output=True, text=True)
+        return out.stdout.strip() or "uv (unknown version)"
+    except OSError:
+        return "uv (unknown version)"
 
 
 def _file_name(entry: dict) -> str:

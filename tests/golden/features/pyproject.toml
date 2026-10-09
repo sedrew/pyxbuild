@@ -19,6 +19,9 @@ exclude = ["*.pyi"]
 utf8-mode = true
 icon = "app.ico"
 
+[tool.pyxbuild.env]
+FEATURES_DATA = "{data_dir}"
+
 [tool.pyxbuild.version-info]
 company-name = "pyxbuild tests"
 copyright = "(c) 2026"

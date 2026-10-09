@@ -11,6 +11,7 @@ import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
+from importlib.resources import files as resources_files
 from pathlib import Path
 
 from . import __version__, doctor
@@ -185,7 +186,8 @@ def _absolute_url(url: str, lock_path: Path) -> str:
     return str((lock_path.parent / url).resolve())
 
 
-def _copy_runtime(src: Path, dest: Path, slim: list[str] | None = None) -> int:
+def _copy_runtime(src: Path, dest: Path, slim: list[str] | None = None, *,
+                  keep_dev_files: bool = False) -> int:
     """Copy the runtime, leaving out what the bundle must not contain.
 
     Skipped: ``include/``, ``libs/``, ``__pycache__``, everything in
@@ -201,7 +203,7 @@ def _copy_runtime(src: Path, dest: Path, slim: list[str] | None = None) -> int:
         nonlocal skipped
         d = Path(directory)
         if d == src:
-            out = {n for n in names if n.lower() in RUNTIME_SKIP}
+            out = set() if keep_dev_files else {n for n in names if n.lower() in RUNTIME_SKIP}
         elif d == site:
             out = {n for n in names if n != "README.txt"}
         else:
@@ -279,7 +281,8 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
              *, launchers: bool = True) -> tuple[list[Path], doctor.Report]:
     """Lay out the application folder in ``app_dir`` (which must not exist)."""
     runtime_dir = app_dir / RUNTIME_DIR
-    saved = _copy_runtime(tb.runtime.path, runtime_dir, cfg.slim)
+    saved = _copy_runtime(tb.runtime.path, runtime_dir, cfg.slim,
+                          keep_dev_files=cfg.keep_dev_files)
     if saved:
         _log(opts, f"[{tb.target.name}] slim: removed {saved / 2**20:.1f} MB of the "
              f"standard library ({', '.join(cfg.slim)})")
@@ -291,6 +294,8 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     removed = apply_excludes(site_packages, Excluder(cfg.exclude))
     if removed:
         _log(opts, f"[{tb.target.name}] excluded {len(removed)} file(s)")
+    boot_src = resources_files("pyxbuild").joinpath("_boot", "_pyxbuild_boot.py").read_bytes()
+    (runtime_dir / "Lib" / "_pyxbuild_boot.py").write_bytes(boot_src)
     if cfg.bytecode:
         _log(opts, f"[{tb.target.name}] compiling bytecode with host Python {tb.python}")
         compile_bytecode(runtime_dir, tb.python)
@@ -305,7 +310,8 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
                 version_info_cfg=cfg.version_info, icon=cfg.icon,
             )
             exe.write_bytes(build_launcher(entry, tb.target.name, python_rel=RUNTIME_DIR,
-                                           utf8_mode=cfg.utf8_mode, resources=res))
+                                           utf8_mode=cfg.utf8_mode, resources=res,
+                                           boot=True))
             created.append(exe)
 
     info = {
@@ -317,6 +323,7 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
                     "file": tb.runtime.spec.file, "sha256": tb.runtime.spec.sha256},
         "launchers": {e.name: {"entry-point": f"{e.module}:{e.attr}", "gui": e.gui}
                       for e in cfg.entry_points},
+        "boot": cfg.boot_settings(),
     }
     # newline="\n": text mode would write CRLF on Windows and break
     # byte-identical builds across hosts

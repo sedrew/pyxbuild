@@ -174,3 +174,21 @@ def test_unknown_slim_preset_is_rejected(tmp_path):
         '[tool.pyxbuild]\nslim = ["everything"]\n')
     with pytest.raises(ConfigError, match="unknown slim preset"):
         load_config(tmp_path)
+
+
+def test_doctor_two_openmp_runtimes(runtime):
+    site = runtime / "Lib" / "site-packages"
+    (site / "torch" / "lib").mkdir(parents=True)
+    (site / "torch" / "lib" / "libiomp5md.dll").write_bytes(make_pe(["KERNEL32.dll"]))
+    (site / "sklearn" / ".libs").mkdir(parents=True)
+    (site / "sklearn" / ".libs" / "vcomp140.dll").write_bytes(make_pe(["KERNEL32.dll"]))
+    report = doctor.check_bundle(runtime.parent, runtime)
+    assert any("OMP: Error #15" in f.message for f in report.findings)
+
+
+def test_doctor_unevaluable_markers(tmp_path, runtime):
+    install_wheel(make_wheel(tmp_path / "w", "odd", requires=[
+        'winfix; platform_release >= "10"', 'plain']), runtime)
+    report = doctor.check_bundle(runtime.parent, runtime)
+    assert any("platform_release" in f.message and f.level == doctor.WARNING
+               for f in report.findings)

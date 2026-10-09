@@ -64,8 +64,29 @@ KNOWN_ISSUES: dict[str, tuple[str, str]] = {
     "pyside6": (INFO, "Qt platform plugins must be found at run time; smoke-test the GUI"),
     "pyqt6": (INFO, "Qt platform plugins must be found at run time; smoke-test the GUI"),
     "torch": (WARNING, "needs the VC++ runtime (c10.dll) and has very long paths; "
-              "check the DLL report below"),
+              "check the DLL report below; torch.compile also needs a C compiler and "
+              "keep-dev-files = true"),
+    "triton-windows": (WARNING, "compiles kernels at run time: needs a C compiler, "
+                       "keep-dev-files = true (Python.h, python3XY.lib)"),
+    "numba": (INFO, "cache=True needs a writable cache; set NUMBA_CACHE_DIR through "
+              "[tool.pyxbuild.env], e.g. \"{data_dir}\\\\numba\""),
+    "comtypes": (WARNING, "generates modules into comtypes/gen at run time; a read-only "
+                 "install folder needs comtypes.client.gen_dir pointed elsewhere"),
+    "nltk": (WARNING, "corpora/models are downloaded at run time (nltk.download); bundle "
+             "them and set NLTK_DATA through [tool.pyxbuild.env]"),
+    "spacy": (WARNING, "models are separate packages (spacy download uses pip, which is not "
+              "in the bundle); add the model wheel to the dependencies or find-links"),
+    "transformers": (WARNING, "models are downloaded into HF_HOME at run time; set HF_HOME "
+                     "through [tool.pyxbuild.env] or ship the model"),
+    "huggingface-hub": (INFO, "downloads into HF_HOME at run time; set it through "
+                        "[tool.pyxbuild.env] if the app must run offline"),
+    "easyocr": (WARNING, "downloads its models at run time into ~/.EasyOCR"),
+    "cffi": (INFO, "API-mode modules compiled at run time (ffi.compile) need a C compiler "
+             "and keep-dev-files = true; prebuilt _cffi modules are fine"),
 }
+
+# OpenMP runtimes: two in one process -> "OMP: Error #15" or crashes
+OPENMP_DLL_RE = re.compile(r"^(libiomp5md|vcomp140|libomp(140)?(\.x86_64)?|libgomp-1)\.dll$")
 
 # MAX_PATH minus a typical install prefix such as
 # C:\Users\<user>\AppData\Local\Programs\<app>\ (about 60 characters).
@@ -180,8 +201,34 @@ def check_bundle(app_dir: Path, runtime_dir: Path, *, machine: int = pe.IMAGE_FI
             else:
                 report.add(level, f"{kind} {dll} not found in the bundle and not a known "
                            f"Windows system DLL", rel)
+    _check_openmp(by_name, app_dir, report)
     _check_known_issues(runtime_dir, report)
+    _check_metadata_markers(runtime_dir, report)
     return report
+
+
+def _check_openmp(by_name: dict[str, list[Path]], app_dir: Path, report: Report) -> None:
+    found = sorted({p.relative_to(app_dir).as_posix() for name, paths in by_name.items()
+                    if OPENMP_DLL_RE.match(name) for p in paths})
+    kinds = {Path(p).name.lower() for p in found}
+    if len(kinds) > 1:
+        report.add(WARNING, "more than one OpenMP runtime in the bundle (" + ", ".join(
+            sorted(kinds)) + "); loading two into one process fails with 'OMP: Error #15' "
+            "or crashes; import order may matter (KMP_DUPLICATE_LIB_OK is a last resort)")
+
+
+def _check_metadata_markers(runtime_dir: Path, report: Report) -> None:
+    """Requires-Dist markers pyxbuild cannot evaluate for the target."""
+    site = runtime_dir / "Lib" / "site-packages"
+    for meta in sorted(site.glob("*.dist-info/METADATA")):
+        for line in meta.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line:
+                break
+            if line.startswith("Requires-Dist:") and (
+                    "platform_release" in line or "platform_version" in line):
+                report.add(WARNING, f"{line.split(':', 1)[1].strip()}: platform_release / "
+                           f"platform_version are unknown when resolving on another OS and "
+                           f"evaluate as empty strings", meta.parent.name)
 
 
 def _check_known_issues(runtime_dir: Path, report: Report) -> None:

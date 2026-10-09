@@ -87,15 +87,28 @@ def decode_manifest(exe: bytes) -> dict[str, str]:
     return dict(line.split("=", 1) for line in payload.splitlines() if line)
 
 
+BOOT_MODULE = "_pyxbuild_boot"
+
+
+def boot_code(entry: EntryPoint) -> str:
+    """Entry point through runtime/Lib/_pyxbuild_boot.py (application launchers)."""
+    return f"import {BOOT_MODULE};{BOOT_MODULE}.main({entry.name!r})"
+
+
 def build_launcher(entry: EntryPoint, target: str, *, python_rel: str,
                    utf8_mode: bool = False,
-                   resources: dict[int, dict[int, bytes]] | None = None) -> bytes:
-    """Stub (+ optional PE resources) + manifest for one entry point."""
+                   resources: dict[int, dict[int, bytes]] | None = None,
+                   boot: bool = False) -> bytes:
+    """Stub (+ optional PE resources) + manifest for one entry point.
+
+    ``boot``: start through ``_pyxbuild_boot`` (needs runtime/pyxbuild.json);
+    dependency console scripts use the self-contained one-line bootstrap.
+    """
     interpreter = python_rel + ("\\pythonw.exe" if entry.gui else "\\python.exe")
     fields = {
         "python": interpreter,
         "flags": DEFAULT_FLAGS + (" -X utf8" if utf8_mode else ""),
-        "code": bootstrap_code(entry),
+        "code": boot_code(entry) if boot else bootstrap_code(entry),
         "entry-point": f"{entry.module}:{entry.attr}",
     }
     stub = stub_bytes(target, entry.gui)

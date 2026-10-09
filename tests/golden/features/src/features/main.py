@@ -79,12 +79,19 @@ def check_utf8_mode():
     assert sys.stdout is None or sys.stdout.encoding == "utf-8"
 
 
+def check_boot_env():
+    # [tool.pyxbuild.env] expanded by _pyxbuild_boot; foreign Tcl paths removed
+    assert os.environ["FEATURES_DATA"].endswith("features"), os.environ["FEATURES_DATA"]
+    assert "TCL_LIBRARY" not in os.environ
+
+
 def check_argv():
     assert sys.argv[0].lower().endswith(("features.exe", "features-gui.exe")), sys.argv
 
 
-CHECKS = [check_argv, check_utf8_mode, check_isolation, check_metadata, check_resources,
-          check_stdlib_extensions, check_tcl, check_subprocess_python, check_multiprocessing]
+CHECKS = [check_argv, check_boot_env, check_utf8_mode, check_isolation, check_metadata,
+          check_resources, check_stdlib_extensions, check_tcl, check_subprocess_python,
+          check_multiprocessing]
 
 
 def _run_checks(out):

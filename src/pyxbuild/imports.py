@@ -209,6 +209,10 @@ def check_imports(runtime_dir: Path, project_wheel: Path, report: doctor.Report)
                                f"(guard it with sys.platform)", where)
                 continue
             if top in available:
+                if top == "zoneinfo" and "tzdata" not in available:
+                    report.add(doctor.WARNING, "zoneinfo is used but tzdata is not installed: "
+                               "Windows has no IANA time zone database; add 'tzdata' to "
+                               "the dependencies", where)
                 continue
             dist = DIST_HINTS.get(use.module) or DIST_HINTS.get(top)
             hint = f"; add {dist!r} to the dependencies" if dist else (

@@ -15,6 +15,11 @@ from .errors import ConfigError
 from .targets import SUPPORTED_PYTHONS, get_target
 
 RUNTIMES = ("python-build-standalone",)
+
+# Variables that point an app at *another* installation's Tcl/Tk or Qt and
+# break the bundled ones (they are not PYTHON*, so -I keeps them).
+DEFAULT_CLEAN_ENV = ("TCL_LIBRARY", "TK_LIBRARY", "TIX_LIBRARY", "QT_PLUGIN_PATH",
+                     "QT_QPA_PLATFORM_PLUGIN_PATH", "QML2_IMPORT_PATH", "QML_IMPORT_PATH")
 MODES = ("folder", "onefile")
 
 _ENTRY_RE = re.compile(
@@ -28,6 +33,7 @@ _KNOWN_KEYS = {
     "targets", "python", "runtime", "mode", "icon", "lock", "exclude", "zip",
     "dist-dir", "index-url", "extra-index-urls", "find-links", "allow-sdist",
     "cross-compile", "pure-python", "extras", "scripts", "slim", "bytecode",
+    "env", "clean-env", "app-id", "truststore", "gui-log", "dpi-aware", "keep-dev-files",
     "version-info", "utf8-mode",
 }
 
@@ -75,6 +81,15 @@ class ProjectConfig:
     slim: list[str] = field(default_factory=lambda: ["tests", "idle", "ensurepip",
                                                      "turtledemo", "lib2to3"])
     """Standard-library parts to drop (see builder.SLIM_PRESETS)."""
+    env: dict[str, str] = field(default_factory=dict)
+    """Environment set at start-up; {app_dir}, {data_dir}, {localappdata} expand."""
+    clean_env: list[str] = field(default_factory=lambda: list(DEFAULT_CLEAN_ENV))
+    app_id: str | None = None
+    truststore: bool = False
+    gui_log: bool = True
+    dpi_aware: bool = True
+    keep_dev_files: bool = False
+    """Keep the runtime's include/ and libs/ (compiling at run time: cffi, triton)."""
     bytecode: bool = False
     """Precompile .pyc (unchecked-hash) with a host interpreter of the same X.Y."""
     pure_python: list[str] = field(default_factory=list)
@@ -84,6 +99,15 @@ class ProjectConfig:
     extras: list[str] = field(default_factory=list)
     version_info: dict[str, str] = field(default_factory=dict)
     utf8_mode: bool = False
+
+    def boot_settings(self) -> dict:
+        """Settings for runtime/Lib/_pyxbuild_boot.py, stored in pyxbuild.json."""
+        out: dict = {"clean-env": list(self.clean_env), "env": dict(sorted(self.env.items())),
+                     "gui-log": self.gui_log, "dpi-aware": self.dpi_aware,
+                     "truststore": self.truststore}
+        if self.app_id:
+            out["app-id"] = self.app_id
+        return out
 
     def may_cross_compile(self, package: str) -> bool:
         if isinstance(self.cross_compile, list):
@@ -258,6 +282,20 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
             raise ConfigError("[tool.pyxbuild] cross-compile must be true, false or a list "
                               "of package names")
         cfg.cross_compile = value
+    if "env" in tool:
+        env = tool["env"]
+        if not isinstance(env, dict) or not all(isinstance(v, str) for v in env.values()):
+            raise ConfigError("[tool.pyxbuild.env] must be a table of strings")
+        cfg.env = dict(env)
+    if "clean-env" in tool:
+        cfg.clean_env = _str_list(tool["clean-env"], "clean-env")
+    if "app-id" in tool:
+        cfg.app_id = _str(tool["app-id"], "app-id")
+    for key in ("truststore", "gui-log", "dpi-aware", "keep-dev-files"):
+        if key in tool:
+            if not isinstance(tool[key], bool):
+                raise ConfigError(f"[tool.pyxbuild] {key} must be true or false")
+            setattr(cfg, key.replace("-", "_"), tool[key])
     if "slim" in tool:
         from .builder import SLIM_PRESETS
 
