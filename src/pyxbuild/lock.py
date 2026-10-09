@@ -60,6 +60,7 @@ class LockInputs:
     extra_index_urls: tuple[str, ...]
     allow_sdist: bool
     find_links: tuple[str, ...] = ()
+    no_binary: tuple[str, ...] = ()
 
     def digest(self) -> str:
         payload = json.dumps(
@@ -71,6 +72,7 @@ class LockInputs:
                 "extra-index-urls": list(self.extra_index_urls),
                 "allow-sdist": self.allow_sdist,
                 "find-links": list(self.find_links),
+                "no-binary": sorted(self.no_binary),
             },
             sort_keys=True,
         )
@@ -153,6 +155,8 @@ def compile_lock(inputs: LockInputs, target: Target, python_full_version: str,
             cmd += ["--extra-index-url", url]
         for link in inputs.find_links:
             cmd += ["--find-links", link]
+        for name in inputs.no_binary:
+            cmd += ["--no-binary", name]
         if quiet:
             cmd.append("--quiet")
         env = {**os.environ, "UV_NO_PROGRESS": "1"}
@@ -175,11 +179,11 @@ def _indent(text: str) -> str:
 
 def _resolve_hint(stderr: str, inputs: LockInputs) -> str | None:
     if "has no wheels" in stderr or "no usable wheels" in stderr or "only-binary" in stderr:
-        hint = ("a dependency has no wheel for this target; pin a version that has one, "
-                "lower 'python' in [tool.pyxbuild], or build the wheel in CI")
-        if not inputs.allow_sdist:
-            hint += " (pure-Python sdists can be allowed with allow-sdist = true)"
-        return hint
+        return ("a dependency has no wheel for this target. Options, safest first: pin a "
+                "version that has one; lower 'python' in [tool.pyxbuild]; pure-python = "
+                "[\"<pkg>\"] if its extension is optional; build the wheel on Windows CI and "
+                "use find-links; allow-sdist = true for pure-Python sdists; cross-compile = "
+                "[\"<pkg>\"] (experimental). See docs/NO_WHEEL.md")
     return None
 
 

@@ -26,7 +26,8 @@ _SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _KNOWN_KEYS = {
     "targets", "python", "runtime", "mode", "icon", "lock", "exclude", "zip",
-    "dist-dir", "index-url", "extra-index-urls", "find-links", "allow-sdist", "extras", "scripts",
+    "dist-dir", "index-url", "extra-index-urls", "find-links", "allow-sdist",
+    "cross-compile", "pure-python", "extras", "scripts",
     "version-info", "utf8-mode",
 }
 
@@ -71,9 +72,30 @@ class ProjectConfig:
     extra_index_urls: list[str] = field(default_factory=list)
     find_links: list[str] = field(default_factory=list)
     allow_sdist: bool = False
+    pure_python: list[str] = field(default_factory=list)
+    """Build these from sdist on the host without their optional C extension."""
+    cross_compile: bool | list[str] = False
+    """Experimental: compile C extensions of sdists for the target with zig."""
     extras: list[str] = field(default_factory=list)
     version_info: dict[str, str] = field(default_factory=dict)
     utf8_mode: bool = False
+
+    def may_cross_compile(self, package: str) -> bool:
+        if isinstance(self.cross_compile, list):
+            return canonicalize_name(package) in self.cross_compile
+        return self.cross_compile
+
+    @property
+    def sdists_allowed(self) -> bool:
+        return self.allow_sdist or bool(self.cross_compile) or bool(self.pure_python)
+
+    @property
+    def only_sdist(self) -> list[str]:
+        """Packages named explicitly for pure-python or cross builds: always from sdist."""
+        named = list(self.pure_python)
+        if isinstance(self.cross_compile, list):
+            named += self.cross_compile
+        return sorted(set(named))
 
     @property
     def normalized_name(self) -> str:
@@ -223,6 +245,26 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
         cfg.index_url = _str(tool["index-url"], "index-url")
     if "extra-index-urls" in tool:
         cfg.extra_index_urls = _str_list(tool["extra-index-urls"], "extra-index-urls")
+    if "cross-compile" in tool:
+        value = tool["cross-compile"]
+        if isinstance(value, list):
+            value = [canonicalize_name(_str(v, "cross-compile")) for v in value]
+        elif not isinstance(value, bool):
+            raise ConfigError("[tool.pyxbuild] cross-compile must be true, false or a list "
+                              "of package names")
+        cfg.cross_compile = value
+    if "pure-python" in tool:
+        from .fallbacks import PURE_PYTHON_SWITCHES
+
+        cfg.pure_python = [canonicalize_name(v) for v in _str_list(tool["pure-python"],
+                                                                     "pure-python")]
+        unknown_pure = [p for p in cfg.pure_python if p not in PURE_PYTHON_SWITCHES]
+        if unknown_pure:
+            raise ConfigError(
+                f"no known pure-Python build switch for: {', '.join(unknown_pure)}",
+                hint=f"known: {', '.join(sorted(PURE_PYTHON_SWITCHES))}; for other packages "
+                     "use allow-sdist (pure sdists) or cross-compile",
+            )
     if "find-links" in tool:
         # relative directories are relative to the project, like other paths
         cfg.find_links = [

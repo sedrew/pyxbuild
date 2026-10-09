@@ -35,7 +35,8 @@ def read_wheel_metadata(path: Path) -> tuple[str, str, list[str], str | None]:
     return msg["Name"], msg["Version"], msg.get_all("Requires-Dist") or [], msg["Summary"]
 
 
-def build_wheel(source: Path, out_dir: Path, *, quiet: bool = False) -> BuiltWheel:
+def build_wheel(source: Path, out_dir: Path, *, quiet: bool = False,
+                env: dict[str, str] | None = None) -> BuiltWheel:
     """Build a wheel for ``source`` (a project directory or an sdist).
 
     Only pure-Python wheels can go into a cross-built application: a wheel
@@ -46,7 +47,7 @@ def build_wheel(source: Path, out_dir: Path, *, quiet: bool = False) -> BuiltWhe
     cmd = [uv_executable(), "build", "--wheel", "--out-dir", str(out_dir), str(source)]
     if quiet:
         cmd.append("--quiet")
-    env = {**os.environ, "UV_NO_PROGRESS": "1"}
+    env = {**(os.environ if env is None else env), "UV_NO_PROGRESS": "1"}
     env.setdefault("SOURCE_DATE_EPOCH", "315532800")
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if proc.returncode != 0:

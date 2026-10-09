@@ -16,6 +16,7 @@ from . import __version__, doctor
 from .config import ProjectConfig
 from .download import fetch, offline_mode
 from .errors import PyxbuildError, ResolveError
+from .imports import check_imports
 from .install import Excluder, apply_excludes, install_wheel
 from .launcher import build_launcher
 from .lock import (
@@ -108,8 +109,8 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
     inputs = LockInputs(
         requirements=tuple(requirements), target=target.name,
         python_version=runtime.spec.version, index_url=cfg.index_url,
-        extra_index_urls=tuple(cfg.extra_index_urls), allow_sdist=cfg.allow_sdist,
-        find_links=tuple(cfg.find_links),
+        extra_index_urls=tuple(cfg.extra_index_urls), allow_sdist=cfg.sdists_allowed,
+        find_links=tuple(cfg.find_links), no_binary=tuple(cfg.only_sdist),
     )
     lock_path = cfg.lock_path(target.name)
     lock = read_lock(lock_path) if lock_path.exists() else None
@@ -124,19 +125,35 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
         lock = read_lock(lock_path)
     assert lock is not None
     selections = select_files(lock, target, env, target.tags(python),
-                              allow_sdist=cfg.allow_sdist)
+                              allow_sdist=cfg.sdists_allowed)
 
     tb = TargetBuild(target, python, runtime, env, wheel, lock_path)
     for sel in selections if download else []:
         path = fetch(_absolute_url(sel.file.url, lock_path), sel.file.sha256, sel.file.name,
                      quiet=opts.quiet)
-        if not sel.is_wheel:
+        if not sel.is_wheel and sel.package.name in cfg.pure_python:
+            from .fallbacks import pure_python_env
+
+            built = build_wheel(path, work / "pure", quiet=True,
+                                env=pure_python_env(sel.package.name, dict(os.environ)))
+            if not built.is_pure:
+                raise PyxbuildError(
+                    f"{sel.package.name}: building without its C extension still produced "
+                    f"{built.path.name}", hint="the project's build switch may have changed")
+            path = built.path
+        elif not sel.is_wheel and cfg.may_cross_compile(sel.package.name):
+            from .crossbuild import cross_build_wheel
+
+            _log(opts, f"[{target.name}] cross-compiling {sel.file.name} with zig (experimental)")
+            path = cross_build_wheel(path, runtime, work / "cross", quiet=True).path
+        elif not sel.is_wheel:
             built = build_wheel(path, work / "sdists", quiet=True)
             if not built.is_pure:
                 raise PyxbuildError(
                     f"{sel.package.name}: the sdist builds a platform-specific wheel on this "
                     f"host, which cannot run on {target.name}",
-                    hint="pin a version with a win_amd64 wheel",
+                    hint="pin a version with a win_amd64 wheel, or try "
+                         f"cross-compile = [\"{sel.package.name}\"] (experimental)",
                 )
             path = built.path
         tb.wheels.append(path)
@@ -240,6 +257,7 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
                                                 encoding="utf-8", newline="\n")
     _normalize_tree(app_dir, source_date_epoch())
     report = doctor.check_bundle(app_dir, runtime_dir)
+    check_imports(runtime_dir, tb.project_wheel.path, report)
     return created, report
 
 
@@ -306,6 +324,28 @@ def lock_only(cfg: ProjectConfig, opts: BuildOptions) -> list[Path]:
     return paths
 
 
+def _report_held_back(tb: TargetBuild, report: doctor.Report) -> None:
+    from .fallbacks import PURE_PYTHON_SWITCHES, held_back
+
+    locked = [(p.name, p.version) for p in read_lock(tb.lock_path).packages if p.version]
+    for name, version, latest, has_wheel, has_sdist in held_back(
+            locked, tb.target.tags(tb.python)):
+        if has_wheel:
+            continue  # newer release exists but the lock is just older: run `pyxbuild lock`
+        if not has_sdist:
+            options = [f"wait for {latest} wheels for {tb.target.name}",
+                       "use an older Python with --python"]
+        else:
+            options = ["build its wheel on Windows CI and add it via find-links",
+                       f'cross-compile = ["{name}"] (experimental, self-contained C only)']
+            if name in PURE_PYTHON_SWITCHES:
+                options.insert(0, f'pure-python = ["{name}"]')
+        report.add(doctor.WARNING,
+                   f"{name} is held back at {version}: {latest} has no wheel for "
+                   f"{tb.target.name} / Python {tb.python}; to use {latest}: "
+                   + "; or ".join(options))
+
+
 def check(cfg: ProjectConfig, opts: BuildOptions) -> list[tuple[str, doctor.Report]]:
     """``pyxbuild doctor``: resolve, install into a scratch folder, report problems."""
     out = []
@@ -325,5 +365,7 @@ def check(cfg: ProjectConfig, opts: BuildOptions) -> list[tuple[str, doctor.Repo
             else:
                 _, report = assemble(scratch_cfg, tb, Path(tmp) / "app", opts,
                                      launchers=False)
+                if not cfg.index_url:
+                    _report_held_back(tb, report)
         out.append((target_name, report))
     return out
