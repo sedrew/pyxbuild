@@ -165,7 +165,8 @@ def compile_lock(inputs: LockInputs, target: Target, python_full_version: str,
                 hint=_resolve_hint(proc.stderr, inputs),
             )
         text = raw.read_text(encoding="utf-8") if raw.exists() else 'lock-version = "1.0"\n'
-    out.write_text(_annotate(text, inputs, target, python_full_version), encoding="utf-8")
+    out.write_text(_annotate(text, inputs, target, python_full_version), encoding="utf-8",
+                   newline="\n")  # same lock bytes on every OS
 
 
 def _indent(text: str) -> str:

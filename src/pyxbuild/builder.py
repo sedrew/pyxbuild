@@ -234,8 +234,10 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
         "launchers": {e.name: {"entry-point": f"{e.module}:{e.attr}", "gui": e.gui}
                       for e in cfg.entry_points},
     }
+    # newline="\n": text mode would write CRLF on Windows and break
+    # byte-identical builds across hosts
     (runtime_dir / "pyxbuild.json").write_text(json.dumps(info, indent=2) + "\n",
-                                                encoding="utf-8")
+                                                encoding="utf-8", newline="\n")
     _normalize_tree(app_dir, source_date_epoch())
     report = doctor.check_bundle(app_dir, runtime_dir)
     return created, report

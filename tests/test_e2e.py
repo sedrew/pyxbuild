@@ -82,6 +82,9 @@ def test_folder_layout(hello_app):
     assert decode_manifest((hello_app / "hello.exe").read_bytes())["python"] == (
         "runtime\\python.exe")
     assert not list(hello_app.rglob("__pycache__"))
+    # files pyxbuild writes must be byte-identical on every host (no CRLF on Windows)
+    assert b"\r" not in (rt / "pyxbuild.json").read_bytes()
+    assert b"\r" not in (hello_app.parent.parent / "pylock.win_amd64.toml").read_bytes()
 
 
 @needs_runner
