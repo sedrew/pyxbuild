@@ -163,7 +163,10 @@ def main() -> int:
     wine = os.environ.get("PYXBUILD_WINE")
     if sys.platform != "win32" and wine:
         # keep one wineserver alive so each run does not pay its start-up
-        subprocess.run([str(Path(wine).with_name("wineserver")), "-p"], check=False)
+        subprocess.Popen([str(Path(wine).with_name("wineserver")), "-p", "-f"],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         start_new_session=True)
+        time.sleep(1)
     with tempfile.TemporaryDirectory(prefix="pyxbuild-bench-") as tmp:
         work = Path(tmp)
         cache = Path(os.environ.get("PYXBUILD_CACHE_DIR") or work / "cache")
