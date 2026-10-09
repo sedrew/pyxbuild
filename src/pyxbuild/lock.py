@@ -59,6 +59,7 @@ class LockInputs:
     index_url: str | None
     extra_index_urls: tuple[str, ...]
     allow_sdist: bool
+    find_links: tuple[str, ...] = ()
 
     def digest(self) -> str:
         payload = json.dumps(
@@ -69,6 +70,7 @@ class LockInputs:
                 "index-url": self.index_url,
                 "extra-index-urls": list(self.extra_index_urls),
                 "allow-sdist": self.allow_sdist,
+                "find-links": list(self.find_links),
             },
             sort_keys=True,
         )
@@ -149,6 +151,8 @@ def compile_lock(inputs: LockInputs, target: Target, python_full_version: str,
             cmd += ["--index-url", inputs.index_url]
         for url in inputs.extra_index_urls:
             cmd += ["--extra-index-url", url]
+        for link in inputs.find_links:
+            cmd += ["--find-links", link]
         if quiet:
             cmd.append("--quiet")
         env = {**os.environ, "UV_NO_PROGRESS": "1"}

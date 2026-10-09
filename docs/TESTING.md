@@ -1,0 +1,47 @@
+# Testing
+
+pyxbuild is only correct if the application it builds on macOS/Linux runs on
+Windows. The tests are layered so that most of them run anywhere in seconds,
+and the claim "it works" always rests on a run on real Windows.
+
+| Layer | Command | Where | What it proves |
+|---|---|---|---|
+| unit | `pytest -m "not slow"` | any OS, no network | markers/tags for the target, config, lock parsing and wheel choice, launcher manifest (incl. after signing), PE parser, installer layout + RECORD, excludes, doctor |
+| stubs | `python tools/build_stubs.py --check` | Linux, macOS, Windows | the committed launcher binaries are exactly what `stub/launcher.c` compiles to with zig, on every host |
+| e2e | `pytest -m "slow and not golden"` | Wine on Linux, natively on Windows | real builds from PyPI that run: argv quoting, Unicode, exit codes, exceptions, GUI subsystem, multiprocessing, `sys.executable` subprocesses, moved folder with spaces/Unicode, dependency console scripts, signed launchers, reproducibility, `--frozen`/`--offline` |
+| golden | `pytest -m golden` / `tools/golden.py` | build anywhere, run on Windows | the golden set of packages below works when built on another OS |
+| cross-host | CI `reproducibility` | ubuntu, macos-14, windows | the zips built on the three hosts have identical sha256 |
+| pip parity | `tools/compare_with_pip.py` | CI windows-latest | the installed file tree equals `pip install` of the same wheels |
+
+Ctrl+Break forwarding (`test_ctrl_break_...`) only runs on real Windows.
+
+## Wine
+
+Wine is a convenience for fast local feedback, not the reference. Ubuntu
+24.04's Wine 9.0 cannot run numpy (its `ucrtbase.dll` lacks `crealf`);
+use Wine 10+:
+
+```console
+eval "$(tools/get_wine.sh)"      # portable Wine 11 (Kron4ek/Wine-Builds), sets PYXBUILD_WINE
+```
+
+Known Wine quirks: Python fails to initialise stdio when stdout/stderr are
+redirected to a regular file (use pipes); there is no display, so the golden
+tests skip `Tk()` windows and run Qt with `QT_QPA_PLATFORM=offscreen`.
+
+## Golden set
+
+| level | project | packages | runs on |
+|---|---|---|---|
+| — | `tests/golden/hello` | requests (HTTPS) | 3.12 |
+| — | `tests/golden/features` | stdlib only: metadata, resources, sqlite/ssl/ctypes/lzma, Tcl, multiprocessing, isolation, UTF-8 mode, GUI script | 3.11–3.14 |
+| 1 | `tests/golden/level1` | numpy, pandas, Pillow, requests+certifi, lxml, cryptography, pydantic, tkinter | 3.11–3.14 |
+| 2 | `tests/golden/level2` | matplotlib, scipy, pywin32, psutil, orjson, pyzmq, opencv-python-headless, PySide6 | 3.12, 3.13 |
+
+Each golden app prints `OK <check>` / `FAIL <check>: traceback` and exits
+non-zero on any failure. Override the Python matrix with
+`PYXBUILD_GOLDEN1_PYTHONS=3.12,3.13` / `PYXBUILD_GOLDEN2_PYTHONS=...`.
+
+Not covered yet: a clean Windows without the VC++ Redistributable (GitHub's
+windows-latest has it installed; the doctor's static check stands in), and
+level 3 (torch, playwright, sdist-only packages).

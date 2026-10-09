@@ -122,4 +122,6 @@ def test_pe_parser_rejects_garbage():
 def test_committed_stubs_match_source():
     proc = subprocess.run([sys.executable, str(ROOT / "tools" / "build_stubs.py"), "--check"],
                           capture_output=True, text=True)
+    if "stubs are built with zig" in proc.stdout + proc.stderr:
+        pytest.skip(proc.stderr.strip())
     assert proc.returncode == 0, proc.stdout + proc.stderr

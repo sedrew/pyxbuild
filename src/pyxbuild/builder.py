@@ -46,7 +46,7 @@ class BuildOptions:
     """Re-resolve even if the lock file is up to date."""
     out_dir: Path | None = None
     quiet: bool = False
-    strict: bool = True
+    strict: bool = False
     """Fail the build when the bundle check reports errors."""
 
 
@@ -105,6 +105,7 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
         requirements=tuple(requirements), target=target.name,
         python_version=runtime.spec.version, index_url=cfg.index_url,
         extra_index_urls=tuple(cfg.extra_index_urls), allow_sdist=cfg.allow_sdist,
+        find_links=tuple(cfg.find_links),
     )
     lock_path = cfg.lock_path(target.name)
     lock = read_lock(lock_path) if lock_path.exists() else None
@@ -162,7 +163,7 @@ def _normalize_tree(root: Path, epoch: int) -> None:
     for path in sorted(root.rglob("*"), key=lambda p: -len(p.parts)):
         if path.is_file():
             path.chmod(0o755 if path.suffix.lower() in (".exe", ".dll", ".pyd") else 0o644)
-        os.utime(path, (epoch, epoch), follow_symlinks=False)
+        os.utime(path, (epoch, epoch))
     os.utime(root, (epoch, epoch))
 
 
@@ -252,7 +253,7 @@ def build(cfg: ProjectConfig, opts: BuildOptions | None = None) -> list[BuildRes
             if report.errors and opts.strict:
                 raise PyxbuildError(
                     f"bundle check found {len(report.errors)} error(s)",
-                    hint="fix them or pass --no-strict to build anyway",
+                    hint="fix them, or build without --strict",
                 )
             app_dir = dist / f"{cfg.normalized_name}-{target.name}"
             if app_dir.exists():

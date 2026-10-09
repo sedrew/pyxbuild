@@ -18,23 +18,32 @@ INFO = "info"
 # Lower-case. Anything matching api-ms-win-* / ext-ms-win-* is a Windows API set.
 SYSTEM_DLLS = frozenset(
     """
-advapi32.dll authz.dll avrt.dll bcrypt.dll bcryptprimitives.dll cabinet.dll cfgmgr32.dll
-clbcatq.dll combase.dll comctl32.dll comdlg32.dll comppkgsup.dll coremessaging.dll
-credui.dll crypt32.dll cryptbase.dll cryptnet.dll cryptsp.dll cryptui.dll d2d1.dll d3d10.dll
-d3d10_1.dll d3d11.dll d3d12.dll d3d9.dll d3dcompiler_47.dll dbgeng.dll dbghelp.dll dcomp.dll
-ddraw.dll devobj.dll dhcpcsvc.dll dnsapi.dll dsound.dll dwmapi.dll dwmcore.dll dwrite.dll
-dxcore.dll dxgi.dll dxva2.dll esent.dll evr.dll firewallapi.dll fltlib.dll fwpuclnt.dll
-gdi32.dll gdiplus.dll glu32.dll hid.dll httpapi.dll imagehlp.dll imm32.dll inputhost.dll
-iphlpapi.dll kernel32.dll kernelbase.dll ksuser.dll mf.dll mfcore.dll mfplat.dll
-mfreadwrite.dll mfuuid.dll mlang.dll mpr.dll msacm32.dll mscms.dll msi.dll msimg32.dll
-msvcrt.dll mswsock.dll msxml6.dll ncrypt.dll netapi32.dll normaliz.dll nsi.dll ntdll.dll
-ntdsapi.dll ole32.dll oleacc.dll oleaut32.dll opengl32.dll pdh.dll photometadatahandler.dll
-powrprof.dll propsys.dll psapi.dll rasapi32.dll rpcrt4.dll rstrtmgr.dll sechost.dll
-secur32.dll setupapi.dll shcore.dll shell32.dll shlwapi.dll srvcli.dll sspicli.dll tdh.dll
-ucrtbase.dll umpdc.dll urlmon.dll user32.dll userenv.dll usp10.dll uxtheme.dll version.dll
-websocket.dll wer.dll wevtapi.dll windows.storage.dll windowscodecs.dll winhttp.dll
-wininet.dll winmm.dll winnsi.dll winspool.drv wintrust.dll winusb.dll wlanapi.dll
-wldap32.dll wmi.dll ws2_32.dll wsock32.dll wtsapi32.dll xinput1_4.dll xmllite.dll
+aclui.dll activeds.dll adsldpc.dll advapi32.dll audioses.dll authz.dll avicap32.dll
+avifil32.dll avrt.dll bcrypt.dll bcryptprimitives.dll bluetoothapis.dll bthprops.cpl
+cabinet.dll cfgmgr32.dll clbcatq.dll cldapi.dll clusapi.dll combase.dll comctl32.dll
+comdlg32.dll comppkgsup.dll coremessaging.dll credui.dll crypt32.dll cryptbase.dll
+cryptnet.dll cryptsp.dll cryptui.dll cscapi.dll d2d1.dll d3d10.dll d3d10_1.dll d3d11.dll
+d3d11on12.dll d3d12.dll d3d9.dll d3dcompiler_43.dll d3dcompiler_47.dll davclnt.dll
+dbgcore.dll dbgeng.dll dbghelp.dll dcomp.dll ddraw.dll devobj.dll dhcpcsvc.dll dhcpcsvc6.dll
+dinput8.dll dnsapi.dll dpapi.dll dsound.dll dsrole.dll dwmapi.dll dwmcore.dll dwrite.dll
+dxcompiler.dll dxcore.dll dxgi.dll dxva2.dll esent.dll evr.dll faultrep.dll firewallapi.dll
+fltlib.dll fwbase.dll fwpuclnt.dll gdi32.dll gdiplus.dll glu32.dll hid.dll httpapi.dll
+icmp.dll imagehlp.dll imm32.dll inputhost.dll iphlpapi.dll kernel32.dll kernelbase.dll
+ksuser.dll ktmw32.dll loadperf.dll locationapi.dll logoncli.dll lz32.dll mapi32.dll mf.dll
+mfcore.dll mfplat.dll mfreadwrite.dll mfsensorgroup.dll mfsrcsnk.dll mfuuid.dll mlang.dll
+mmdevapi.dll mpr.dll msacm32.dll mscms.dll msctf.dll msi.dll msimg32.dll msvcrt.dll
+msvfw32.dll mswsock.dll msxml6.dll ncrypt.dll netapi32.dll netutils.dll normaliz.dll nsi.dll
+ntdll.dll ntdsapi.dll ntmarta.dll odbc32.dll odbccp32.dll ole32.dll oleacc.dll oleaut32.dll
+oledlg.dll opengl32.dll pdh.dll photometadatahandler.dll powrprof.dll profapi.dll
+propsys.dll psapi.dll query.dll rasapi32.dll resutils.dll rpcrt4.dll rstrtmgr.dll samcli.dll
+sechost.dll secur32.dll sensorsapi.dll setupapi.dll sfc.dll sfc_os.dll shcore.dll
+shell32.dll shfolder.dll shlwapi.dll srvcli.dll sspicli.dll tapi32.dll tdh.dll traffic.dll
+twinapi.dll ucrtbase.dll uiautomationcore.dll umpdc.dll urlmon.dll user32.dll userenv.dll
+usp10.dll uxtheme.dll version.dll virtdisk.dll vssapi.dll wbemuuid.dll websocket.dll wer.dll
+wevtapi.dll windows.storage.dll windowscodecs.dll winhttp.dll wininet.dll winmm.dll
+winnsi.dll winscard.dll winspool.drv wintrust.dll wintypes.dll winusb.dll wkscli.dll
+wlanapi.dll wldap32.dll wmi.dll wmvcore.dll ws2_32.dll wsock32.dll wtsapi32.dll
+xaudio2_9.dll xinput1_4.dll xinput9_1_0.dll xmllite.dll
 """.split()  # noqa: SIM905
 )
 
@@ -81,14 +90,24 @@ class Report:
     def errors(self) -> list[Finding]:
         return [f for f in self.findings if f.level == ERROR]
 
-    def format(self) -> str:
+    def format(self, max_paths: int = 3) -> str:
+        """One line per distinct problem, listing a few of the files it affects."""
         if not self.findings:
             return "no problems found"
         order = {ERROR: 0, WARNING: 1, INFO: 2}
+        groups: dict[tuple[str, str], list[str]] = {}
+        for f in self.findings:
+            groups.setdefault((f.level, f.message), []).append(f.path or "")
         lines = []
-        for f in sorted(self.findings, key=lambda f: (order[f.level], f.path or "", f.message)):
-            where = f" [{f.path}]" if f.path else ""
-            lines.append(f"{f.level:7} {f.message}{where}")
+        for (level, message), paths in sorted(groups.items(),
+                                              key=lambda kv: (order[kv[0][0]], kv[0][1])):
+            paths = sorted(p for p in paths if p)
+            where = ""
+            if paths:
+                shown = ", ".join(paths[:max_paths])
+                more = f" and {len(paths) - max_paths} more" if len(paths) > max_paths else ""
+                where = f" [{shown}{more}]"
+            lines.append(f"{level:7} {message}{where}")
         return "\n".join(lines)
 
 
@@ -146,19 +165,20 @@ def check_bundle(app_dir: Path, runtime_dir: Path, *, machine: int = pe.IMAGE_FI
             if is_system_dll(low):
                 continue
             kind = "delay-loaded DLL" if delayed else "DLL"
+            # A .pyd that cannot resolve an import fails on `import`; a .dll or
+            # .exe may be an optional plugin that is never loaded.
+            level = ERROR if path.suffix.lower() == ".pyd" and not delayed else WARNING
             if candidates:
                 where = ", ".join(sorted({c.parent.relative_to(app_dir).as_posix()
                                           for c in candidates}))
                 report.add(INFO, f"{kind} {dll} found only in {where}; the package must "
                            f"add that directory with os.add_dll_directory", rel)
             elif VC_RUNTIME_RE.match(low):
-                report.add(WARNING if delayed else ERROR,
-                           f"needs Visual C++ runtime {dll}, which is not in the bundle and "
-                           f"not part of Windows", rel)
+                report.add(level, f"needs Visual C++ runtime {dll}, which is not in the bundle "
+                           f"and not part of Windows", rel)
             else:
-                report.add(WARNING if delayed else ERROR,
-                           f"{kind} {dll} not found in the bundle and not a known Windows "
-                           f"system DLL", rel)
+                report.add(level, f"{kind} {dll} not found in the bundle and not a known "
+                           f"Windows system DLL", rel)
     _check_known_issues(runtime_dir, report)
     return report
 

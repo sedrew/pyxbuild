@@ -14,6 +14,7 @@ import io
 import os
 import posixpath
 import re
+import warnings
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
@@ -88,8 +89,12 @@ def install_wheel(wheel_path: Path, runtime_dir: Path) -> None:
         bytecode_optimization_levels=(),
     )
     try:
-        with WheelFile.open(wheel_path) as source:
-            install(source, destination, {"INSTALLER": INSTALLER_NAME})
+        with warnings.catch_warnings():
+            # installer skips bytecode shipped inside wheels (PySide6 does this)
+            # and warns per file; Python regenerates it, so stay quiet.
+            warnings.filterwarnings("ignore", message="Skip installing .*__pycache__")
+            with WheelFile.open(wheel_path) as source:
+                install(source, destination, {"INSTALLER": INSTALLER_NAME})
     except FileExistsError as exc:
         raise PyxbuildError(
             f"{wheel_path.name} overwrites a file installed by another package: {exc}"

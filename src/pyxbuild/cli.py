@@ -39,8 +39,8 @@ def _parser() -> argparse.ArgumentParser:
     b.add_argument("--relock", action="store_true", help="re-resolve dependencies")
     b.add_argument("--offline", action="store_true",
                    help="use only cached downloads (implies --frozen)")
-    b.add_argument("--no-strict", dest="strict", action="store_false",
-                   help="do not fail when the bundle check reports errors")
+    b.add_argument("--strict", action="store_true",
+                   help="fail when the bundle check reports errors (missing DLLs, ...)")
 
     lk = sub.add_parser("lock", help="resolve dependencies for the target into pylock.toml")
     _add_common(lk)

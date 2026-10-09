@@ -27,7 +27,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6"]
-stubs = ["ziglang>=0.13"]
+stubs = ["ziglang==0.16.0"]
 
 [project.scripts]
 pyxbuild = "pyxbuild.cli:main"

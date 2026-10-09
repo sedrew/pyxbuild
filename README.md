@@ -1,3 +1,94 @@
 # pyxbuild
 
-Build Windows x64 applications from a standard Python project on any OS.
+Build a Windows x64 application from a standard Python project — on macOS,
+Linux or Windows. No compiler, no Wine, no virtual machine.
+
+```console
+$ pyxbuild build
+[win_amd64] Python 3.12 runtime (python-build-standalone)
+[win_amd64] building wheel for myapp
+[win_amd64] resolving 2 requirement(s) with uv
+[win_amd64] installing 14 wheel(s)
+[win_amd64] built dist/myapp-win_amd64
+```
+
+```
+dist/myapp-win_amd64/
+├── myapp.exe            ← launcher (one per entry point)
+└── runtime/             ← CPython for Windows + your wheels in Lib/site-packages
+```
+
+Copy the folder (or the `--zip`) to any Windows 10/11 x64 machine; no Python
+or Visual C++ Redistributable needs to be installed.
+
+## How it works
+
+Building an `.exe` here means *assembling*, not compiling:
+
+1. download a prebuilt CPython for Windows ([python-build-standalone],
+   pinned by version and sha256);
+2. resolve dependencies **for the target** (`sys_platform == "win32"`,
+   `platform_machine == "AMD64"`) with `uv pip compile --python-platform`,
+   written to a standard `pylock.toml` (PEP 751);
+3. install the `win_amd64` wheels into the runtime's `site-packages` with the
+   PyPA `installer` library — no code from the wheels is run;
+4. copy a small prebuilt launcher (C, compiled once with `zig cc` and
+   shipped inside pyxbuild) and append a manifest naming the entry point.
+
+The result is byte-for-byte the same on every build host.
+
+## Usage
+
+```toml
+[project]
+name = "myapp"
+version = "1.2.0"
+requires-python = ">=3.12"
+dependencies = ["requests>=2.32", "PySide6"]
+
+[project.gui-scripts]
+myapp = "myapp.main:run"
+
+[tool.pyxbuild]            # everything is optional
+targets = ["win_amd64"]
+python = "3.12"            # default: newest supported allowed by requires-python
+mode = "folder"            # "onefile" is planned
+lock = "pylock.toml"       # default: pylock.win_amd64.toml
+exclude = ["tests/", "*.pyi"]
+zip = true
+utf8-mode = false          # run the app with -X utf8
+```
+
+```console
+pyxbuild build [--target win_amd64] [--python 3.12] [--zip] [--frozen | --offline]
+pyxbuild lock                    # resolve only, (re)write pylock.win_amd64.toml
+pyxbuild doctor                  # missing wheels, missing DLLs, VC++ runtime, long paths
+pyxbuild sign dist/myapp-win_amd64 --cert cert.pfx --password-env PFX_PASSWORD
+```
+
+Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
+`--offline` builds from the download cache only.
+
+## Limits
+
+* Every dependency needs a `win_amd64`, `abi3` or pure-Python wheel on the
+  index. `pyxbuild doctor` lists the ones that do not. Pure-Python sdists can
+  be allowed with `allow-sdist = true`; sdists with C code are refused.
+* The project itself must be pure Python.
+* Only the folder mode and the `win_amd64` target exist so far.
+
+See [docs/DESIGN.md](docs/DESIGN.md), [docs/TESTING.md](docs/TESTING.md) and
+[docs/OPEN_QUESTIONS.md](docs/OPEN_QUESTIONS.md).
+
+[python-build-standalone]: https://github.com/astral-sh/python-build-standalone
+
+## Development
+
+```console
+pip install -e ".[dev,stubs]"
+pytest -m "not slow"                       # unit tests, seconds
+eval "$(tools/get_wine.sh)"                # Wine 11 for running apps on Linux
+pytest -m "slow and not golden"            # build + run real apps
+pytest -m golden                           # golden set (numpy, pandas, Qt, ...)
+python tools/build_stubs.py --check        # committed launchers == source
+```

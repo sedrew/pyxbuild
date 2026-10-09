@@ -27,6 +27,10 @@ ROOT = Path(__file__).resolve().parent.parent
 SOURCE = ROOT / "stub" / "launcher.c"
 OUT_DIR = ROOT / "src" / "pyxbuild" / "_stubs"
 
+# The stubs are byte-reproducible only with the same zig release on every host.
+# 0.16.0 is the newest ziglang on PyPI with wheels for Linux, macOS and Windows.
+ZIG_VERSION = "0.16.0"
+
 TARGETS = {
     "win_amd64": "x86_64-windows-gnu",
 }
@@ -57,6 +61,11 @@ def zig_command() -> list[str]:
 def build(out_dir: Path) -> dict[str, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
     zig = zig_command()
+    version = subprocess.run([*zig, "version"], capture_output=True, text=True,
+                             check=True).stdout.strip()
+    if version != ZIG_VERSION:
+        sys.exit(f"zig {version} found, but the stubs are built with zig {ZIG_VERSION}: "
+                 f"pip install ziglang=={ZIG_VERSION}")
     hashes = {}
     for platform, triple in TARGETS.items():
         for kind in ("console", "gui"):

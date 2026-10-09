@@ -26,7 +26,7 @@ _SCRIPT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 _KNOWN_KEYS = {
     "targets", "python", "runtime", "mode", "icon", "lock", "exclude", "zip",
-    "dist-dir", "index-url", "extra-index-urls", "allow-sdist", "extras", "scripts",
+    "dist-dir", "index-url", "extra-index-urls", "find-links", "allow-sdist", "extras", "scripts",
     "version-info", "utf8-mode",
 }
 
@@ -69,6 +69,7 @@ class ProjectConfig:
     dist_dir: Path = Path("dist")
     index_url: str | None = None
     extra_index_urls: list[str] = field(default_factory=list)
+    find_links: list[str] = field(default_factory=list)
     allow_sdist: bool = False
     extras: list[str] = field(default_factory=list)
     version_info: dict[str, str] = field(default_factory=dict)
@@ -222,6 +223,12 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
         cfg.index_url = _str(tool["index-url"], "index-url")
     if "extra-index-urls" in tool:
         cfg.extra_index_urls = _str_list(tool["extra-index-urls"], "extra-index-urls")
+    if "find-links" in tool:
+        # relative directories are relative to the project, like other paths
+        cfg.find_links = [
+            v if "://" in v else str((root / v).resolve())
+            for v in _str_list(tool["find-links"], "find-links")
+        ]
     if "allow-sdist" in tool:
         if not isinstance(tool["allow-sdist"], bool):
             raise ConfigError("[tool.pyxbuild] allow-sdist must be true or false")
