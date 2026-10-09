@@ -72,8 +72,11 @@ PACKAGES: dict[str, str] = {
                    "o.get_available_providers()",
     "tokenizers": "from tokenizers import Tokenizer; from tokenizers.models import BPE; "
                   "assert Tokenizer(BPE())",
-    "statsmodels": "import statsmodels.api as sm; assert sm.OLS([1,2],[1,2]).fit().params[0]==1",
+    "statsmodels": "import statsmodels.api as sm; "
+                   "assert abs(sm.OLS([1,2],[1,2]).fit().params[0]-1) < 1e-9",
     "torch": "import torch; assert (torch.ones(2,2) @ torch.ones(2,2)).sum().item()==8",
+    "torch + msvc-runtime": "import torch; "
+                            "assert (torch.ones(2,2) @ torch.ones(2,2)).sum().item()==8",
     "uvloop": "import uvloop",  # no Windows support: expected to fail resolution
 }
 
@@ -99,7 +102,7 @@ def _project(dest: Path, requirement: str, smoke: str, python: str) -> Path:
         [project]
         name = "smokeapp"
         version = "1.0"
-        dependencies = [{json.dumps(requirement)}]
+        dependencies = {json.dumps(requirement.split(" + "))}
         [project.scripts]
         smokeapp = "smokeapp:main"
         [tool.pyxbuild]
@@ -111,7 +114,7 @@ def _project(dest: Path, requirement: str, smoke: str, python: str) -> Path:
         def main():
             {smoke}
             from importlib.metadata import version
-            print("SMOKE-OK", version({json.dumps(requirement.split(';')[0])}))
+            print("SMOKE-OK", version({json.dumps(requirement.split(" + ")[0])}))
             return 0
     """))
     return proj

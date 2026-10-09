@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "golden-level3"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "torch",
+    # torch links against msvcp140*.dll / vcruntime140_threads.dll, which are
+    # not part of Windows and not shipped by python-build-standalone
+    "msvc-runtime",
+]
+
+[project.scripts]
+level3 = "level3.main:run"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/level3"]

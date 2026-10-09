@@ -28,6 +28,7 @@ MATRIX = [
     ("features", "features", ["3.11", "3.12", "3.13", "3.14"]),
     ("level1", "level1", ["3.11", "3.12", "3.13", "3.14"]),
     ("level2", "level2", ["3.12", "3.13"]),
+    ("level3", "level3", ["3.12"]),  # torch: CI only, Wine lacks NUMA APIs OpenMP needs
 ]
 
 

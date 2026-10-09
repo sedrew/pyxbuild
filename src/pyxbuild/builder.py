@@ -156,11 +156,17 @@ def _copy_runtime(src: Path, dest: Path) -> None:
         return {n for n in names if n == "__pycache__"}
 
     shutil.copytree(src, dest, ignore=ignore)
-    # python-build-standalone ships pip; an application does not need it and
-    # an installer for the wrong platform would only confuse users.
+    # python-build-standalone preinstalls pip (and setuptools for 3.11). The
+    # bundle must contain exactly the locked packages: anything else could
+    # clash with them (torch requires its own setuptools on 3.11).
     site = dest / "Lib" / "site-packages"
-    for item in sorted(site.glob("pip")) + sorted(site.glob("pip-*.dist-info")):
-        shutil.rmtree(item)
+    for item in sorted(site.iterdir()):
+        if item.name == "README.txt":
+            continue
+        if item.is_dir():
+            shutil.rmtree(item)
+        else:
+            item.unlink()
 
 
 def _normalize_tree(root: Path, epoch: int) -> None:

@@ -175,7 +175,8 @@ def check_bundle(app_dir: Path, runtime_dir: Path, *, machine: int = pe.IMAGE_FI
                            f"add that directory with os.add_dll_directory", rel)
             elif VC_RUNTIME_RE.match(low):
                 report.add(level, f"needs Visual C++ runtime {dll}, which is not in the bundle "
-                           f"and not part of Windows", rel)
+                           f"and not part of Windows (add 'msvc-runtime' to the dependencies "
+                           f"to ship it)", rel)
             else:
                 report.add(level, f"{kind} {dll} not found in the bundle and not a known "
                            f"Windows system DLL", rel)
