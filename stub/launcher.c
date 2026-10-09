@@ -23,6 +23,9 @@
  * appended after our trailer; the security data directory tells us where the
  * original overlay ends, and up to 7 bytes of zero padding are skipped.
  *
+ * The stub does not use the C runtime at all (only KERNEL32 and USER32), which
+ * keeps it around 7 KB and free of UCRT/mingw start-up code.
+ *
  * Build: python tools/build_stubs.py (uses `zig cc`, see that script).
  */
 
@@ -206,7 +209,33 @@ static wchar_t *self_path(void) {
     }
 }
 
-int main(void) {
+/* No C runtime: the stub only calls Win32. Tiny replacements for the few
+ * helpers the compiler may emit calls to, and our own entry point. */
+void *memcpy(void *dst, const void *src, size_t n) {
+    unsigned char *d = dst;
+    const unsigned char *s = src;
+    while (n--) *d++ = *s++;
+    return dst;
+}
+
+void *memset(void *dst, int c, size_t n) {
+    unsigned char *d = dst;
+    while (n--) *d++ = (unsigned char)c;
+    return dst;
+}
+
+int memcmp(const void *a, const void *b, size_t n) {
+    const unsigned char *x = a, *y = b;
+    for (; n; n--, x++, y++)
+        if (*x != *y) return *x - *y;
+    return 0;
+}
+
+static int run(void);
+
+void __stdcall pyx_entry(void) { ExitProcess((UINT)run()); }
+
+static int run(void) {
     wchar_t *exe = self_path();
     char *payload = read_manifest(exe);
     wchar_t *python = manifest_get(payload, "python");

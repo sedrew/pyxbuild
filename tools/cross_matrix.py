@@ -4,7 +4,7 @@ For each package: download the latest sdist, cross-build a win_amd64 wheel
 on this host, install it into a copy of the target runtime and run a smoke
 test with the Windows interpreter (natively or under $PYXBUILD_WINE).
 
-    python tools/cross_matrix.py --python 3.12 --out docs/CROSS_COMPILE.md
+    python tools/cross_matrix.py --python 3.12 --json results.json
 """
 
 from __future__ import annotations
@@ -13,20 +13,15 @@ import argparse
 import concurrent.futures as cf
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import urllib.request
 from pathlib import Path
 
-from pyxbuild.crossbuild import cross_build_wheel
-from pyxbuild.download import fetch
 from pyxbuild.errors import PyxbuildError
-from pyxbuild.install import install_wheel
-from pyxbuild.runtime import get_runtime
-from pyxbuild.targets import WIN_AMD64
 
 # package -> (smoke test, expectation note)
 PACKAGES = {
@@ -46,10 +41,10 @@ PACKAGES = {
     "wrapt": ("import wrapt, wrapt._wrappers; assert wrapt.__version__", "C"),
     "multidict": ("import multidict._multidict; assert multidict.MultiDict(a=1)['a']==1", "C"),
     "frozenlist": ("import frozenlist; assert frozenlist.FrozenList([1])[0]==1", "Cython"),
-    "yarl": ("import yarl._quoting_c as q; assert q._Quoter()('a b')=='a%20b'", "Cython"),
+    "yarl": ("import yarl, yarl._quoting_c; assert yarl.URL('http://a/b c').raw_path=='/b%20c'",
+             "Cython"),
     "propcache": ("import propcache; assert propcache.__version__", "Cython"),
-    "cytoolz": ("import sys, types; sys.modules['toolz']=types.ModuleType('toolz'); "
-                "import cytoolz.itertoolz as i; assert i.first([3])==3", "Cython"),
+    "cytoolz": ("import cytoolz, cytoolz.itertoolz; assert cytoolz.first([3])==3", "Cython"),
     "ujson": ("import ujson; assert ujson.loads('[1]')==[1]", "C + C++ (double-conversion)"),
     "levenshtein": ("import Levenshtein; assert Levenshtein.distance('ab','ac')==1",
                     "C++ (scikit-build)"),
@@ -69,27 +64,39 @@ def latest_sdist(package: str) -> tuple[str, str, str, str]:
     raise PyxbuildError(f"{package} {version} has no sdist")
 
 
-def run_cell(package: str, smoke: str, runtime) -> dict:
+def run_cell(package: str, smoke: str, python: str) -> dict:
+    """Build a one-dependency app with cross-compile = [package] and run it."""
     start = time.monotonic()
     result = {"package": package, "version": "", "status": "", "detail": ""}
     try:
-        version, url, sha, filename = latest_sdist(package)
+        version, _, _, _ = latest_sdist(package)
         result["version"] = version
-        sdist = fetch(url, sha, filename, quiet=True)
         with tempfile.TemporaryDirectory(prefix="pyxb-xm-") as tmp:
-            tmp = Path(tmp)
-            try:
-                wheel = cross_build_wheel(sdist, runtime, tmp / "wheels", quiet=True)
-            except PyxbuildError as exc:
-                result.update(status="build-error", detail=_last(str(exc)))
+            proj = Path(tmp) / "app"
+            (proj / "xapp").mkdir(parents=True)
+            (proj / "pyproject.toml").write_text(textwrap.dedent(f"""
+                [build-system]
+                requires = ["hatchling"]
+                build-backend = "hatchling.build"
+                [project]
+                name = "xapp"
+                version = "1.0"
+                dependencies = ["{package}=={version}"]
+                [project.scripts]
+                xapp = "xapp:main"
+                [tool.pyxbuild]
+                python = "{python}"
+                cross-compile = ["{package}"]
+            """))
+            (proj / "xapp" / "__init__.py").write_text(
+                f"def main():\n    {smoke}\n    print('SMOKE-OK')\n")
+            build = subprocess.run([sys.executable, "-m", "pyxbuild", "build", str(proj), "-q"],
+                                   capture_output=True, text=True)
+            if build.returncode != 0:
+                result.update(status="build-error", detail=_last(build.stderr))
                 return result
-            rt = tmp / "rt"
-            shutil.copytree(runtime.path, rt)
-            for d in sorted((rt / "Lib" / "site-packages").iterdir()):
-                if d.name != "README.txt":
-                    shutil.rmtree(d) if d.is_dir() else d.unlink()
-            install_wheel(wheel.path, rt)
-            cmd = [str(rt / "python.exe"), "-c", smoke + "; print('SMOKE-OK')"]
+            exe = proj / "dist" / "xapp-win_amd64" / "xapp.exe"
+            cmd = [str(exe)]
             if sys.platform != "win32":
                 cmd.insert(0, os.environ.get("PYXBUILD_WINE", "wine"))
             proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600,
@@ -100,7 +107,8 @@ def run_cell(package: str, smoke: str, runtime) -> dict:
                 result.update(status="run-error", detail=_last(proc.stderr or proc.stdout))
     except Exception as exc:  # report and continue with the next package
         result.update(status="error", detail=_last(repr(exc)))
-    result["seconds"] = round(time.monotonic() - start)
+    finally:
+        result["seconds"] = round(time.monotonic() - start)
     return result
 
 
@@ -117,11 +125,10 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, default=3)
     parser.add_argument("--json", type=Path)
     args = parser.parse_args()
-    runtime = get_runtime(WIN_AMD64, args.python, quiet=True)
     names = args.packages.split(",")
     results = []
     with cf.ThreadPoolExecutor(args.jobs) as pool:
-        futs = {pool.submit(run_cell, n, PACKAGES[n][0], runtime): n for n in names}
+        futs = {pool.submit(run_cell, n, PACKAGES[n][0], args.python): n for n in names}
         for fut in cf.as_completed(futs):
             r = fut.result()
             r["kind"] = PACKAGES[r["package"]][1]

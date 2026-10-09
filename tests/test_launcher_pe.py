@@ -31,7 +31,7 @@ def test_stubs_are_amd64_pe_with_expected_subsystem(gui, subsystem):
 
 
 def test_stub_size_is_small():
-    assert len(stub_bytes("win_amd64", False)) < 128 * 1024
+    assert len(stub_bytes("win_amd64", False)) < 16 * 1024  # CRT-free stub, ~7 KB
 
 
 def test_manifest_roundtrip():

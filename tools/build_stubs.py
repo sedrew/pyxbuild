@@ -18,6 +18,7 @@ import argparse
 import hashlib
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -35,13 +36,17 @@ TARGETS = {
     "win_amd64": "x86_64-windows-gnu",
 }
 
-COMMON_FLAGS = [
+COMPILE_FLAGS = [
     "-Os",
-    "-s",
     "-fno-ident",
     "-ffile-prefix-map={root}=.",
     "-Wall",
+    # no C runtime: no stack protector, no __chkstk calls
+    "-fno-stack-protector",
+    "-mno-stack-arg-probe",
 ]
+LINK_FLAGS = ["-s", "-nostdlib", "-Wl,--entry,pyx_entry"]
+LIBS = ["-lkernel32", "-luser32"]
 
 
 def zig_command() -> list[str]:
@@ -58,6 +63,25 @@ def zig_command() -> list[str]:
     return [sys.executable, "-m", "ziglang"]
 
 
+def normalize_timestamp(exe: Path) -> None:
+    """Replace the link time in the COFF header with a content hash.
+
+    lld only does this itself (/Brepro) when zig links the mingw CRT; the
+    CRT-free stub would otherwise carry the current time and differ per build.
+    """
+    data = bytearray(exe.read_bytes())
+    pe = struct.unpack_from("<I", data, 0x3C)[0]
+    struct.pack_into("<I", data, pe + 8, 0)
+    opt = pe + 24
+    dirs = opt + 112
+    debug_rva, debug_size = struct.unpack_from("<II", data, dirs + 8 * 6)
+    if debug_rva:
+        sys.exit("unexpected debug directory in the stub; strip it (-s)")
+    stamp = struct.unpack_from("<I", hashlib.sha256(data).digest())[0]
+    struct.pack_into("<I", data, pe + 8, stamp)
+    exe.write_bytes(bytes(data))
+
+
 def build(out_dir: Path) -> dict[str, str]:
     out_dir.mkdir(parents=True, exist_ok=True)
     zig = zig_command()
@@ -70,14 +94,18 @@ def build(out_dir: Path) -> dict[str, str]:
     for platform, triple in TARGETS.items():
         for kind in ("console", "gui"):
             out = out_dir / f"launcher-{kind}-{platform}.exe"
-            flags = [f.format(root=ROOT) for f in COMMON_FLAGS]
+            obj = out_dir / f"launcher-{kind}-{platform}.o"
+            flags = [f.format(root=ROOT) for f in COMPILE_FLAGS]
             if kind == "gui":
-                flags += ["-DPYX_GUI", "-Wl,--subsystem,windows"]
-            else:
-                flags += ["-Wl,--subsystem,console"]
-            cmd = [*zig, "cc", "-target", triple, *flags, "-o", str(out),
-                   os.path.relpath(SOURCE, ROOT)]
-            subprocess.run(cmd, check=True, cwd=ROOT)
+                flags.append("-DPYX_GUI")
+            subsystem = "windows" if kind == "gui" else "console"
+            subprocess.run([*zig, "cc", "-target", triple, *flags, "-c", "-o", str(obj),
+                            os.path.relpath(SOURCE, ROOT)], check=True, cwd=ROOT)
+            subprocess.run([*zig, "cc", "-target", triple, *LINK_FLAGS,
+                            f"-Wl,--subsystem,{subsystem}", "-o", str(out), str(obj), *LIBS],
+                           check=True, cwd=ROOT)
+            obj.unlink()
+            normalize_timestamp(out)
             for junk in out_dir.glob(out.stem + ".pdb"):
                 junk.unlink()
             hashes[out.name] = hashlib.sha256(out.read_bytes()).hexdigest()
