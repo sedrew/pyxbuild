@@ -175,11 +175,6 @@ class _Destination(SchemeDictionaryDestination):
         if (not parts or ".." in parts or path.startswith(("/", "\\"))
                 or re.match(r"[A-Za-z]:", path)):
             raise PyxbuildError(f"refusing wheel entry outside the install folder: {path!r}")
-        root = Path(self.scheme_dict[scheme]).resolve()
-        target = (root / path).resolve()
-        if not target.is_relative_to(root):
-            raise PyxbuildError(f"refusing wheel entry outside the install folder: {path!r}")
-
         in_site = scheme in ("purelib", "platlib")
         metadata = ".dist-info/" in path and path.count("/") == 1
         excluder = self.state.excluder
@@ -188,6 +183,8 @@ class _Destination(SchemeDictionaryDestination):
             self.skipped.add(path)
             self.state.excluded.append(path)
             return RecordEntry(path, None, None)
+        # before touching the file system: on a Windows host "a:b" would be
+        # taken as a drive or an NTFS stream
         for part in parts:
             problem = windows_name_problem(part)
             if problem:
@@ -195,9 +192,16 @@ class _Destination(SchemeDictionaryDestination):
                         f"[tool.pyxbuild] exclude" if in_site else None)
                 raise PyxbuildError(f"{self.wheel}: cannot install {path!r} for Windows: "
                                     f"{part!r} {problem}", hint=hint)
+        root = Path(self.scheme_dict[scheme]).resolve()
+        if not (root / path).resolve().is_relative_to(root):
+            raise PyxbuildError(f"refusing wheel entry outside the install folder: {path!r}")
 
-        runtime = self.state.runtime_dir.resolve()
-        rel = target.relative_to(runtime).as_posix()
+        # Relative to the runtime as the wheel spells it. Not via resolve():
+        # on Windows that already returns the on-disk spelling of existing
+        # folders, and the case clash would go unreported there.
+        runtime = self.state.runtime_dir
+        scheme_rel = Path(os.path.relpath(self.scheme_dict[scheme], runtime)).as_posix()
+        rel = posixpath.normpath(posixpath.join(scheme_rel, "/".join(parts)))
         canonical = self.state.canonical(rel, self.wheel)
         dest = runtime / canonical
         if dest.exists():

@@ -72,6 +72,19 @@ including the first start without precompiled bytecode.
 **If you hand the app folder on through a tool that skips dot files (CI
 artifacts, some sync tools), use pyxbuild's zip.**
 
+### Built on macOS ARM64, run on Windows x86_64
+
+CI run [#24](https://github.com/sedrew/pyxbuild/actions/runs/38013488797)
+added builds on `macos-14` (Apple Silicon). Every app of the web, data, cli
+and cross groups built there ran on `windows-latest` exactly like the Linux
+builds (ansible failing as expected), including `zig-cross`: eight C, Cython
+and C++ extensions compiled from source with zig on an ARM64 Mac (175 s)
+and imported on x86_64 Windows. The docs-ui group did not run: its artifact
+(33 000 files, mostly mkdocs-material icons) failed to download on the
+Windows runner. CI now passes one pyxbuild zip per app instead
+(`apps_matrix.py --build-only --archive`), which is also how users ship the
+app.
+
 ## What each smoke test does
 
 | application | inside the built app |

@@ -183,13 +183,14 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[cross]"
-      - run: python tools/apps_matrix.py --apps ${{ matrix.apps }} --build-only --keep apps-out --jobs 3
+      - run: python tools/apps_matrix.py --apps ${{ matrix.apps }} --build-only --archive --keep apps-out --jobs 3
       - uses: actions/upload-artifact@v4
         with:
           name: apps-${{ matrix.os }}-${{ matrix.group }}
           path: apps-out
-          # upload-artifact skips dot files by default; mkdocs-material needs
-          # material/templates/.icons
+          # one pyxbuild zip per app (--archive): an artifact of 33 000 small
+          # files failed to download on Windows; and upload-artifact skips dot
+          # files (mkdocs-material's .icons) unless told otherwise
           include-hidden-files: true
           retention-days: 3
 

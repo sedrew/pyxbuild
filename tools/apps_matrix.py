@@ -834,6 +834,9 @@ def main() -> int:
     parser.add_argument("--built-on", default=f"{platform.system()} {platform.machine()}")
     parser.add_argument("--build-only", action="store_true",
                         help="build into --keep and write <app>.json there; do not run")
+    parser.add_argument("--archive", action="store_true",
+                        help="with --build-only: keep each app as pyxbuild's zip (<app>.zip) "
+                             "instead of a folder; --run-from unpacks it")
     parser.add_argument("--run-from", type=Path,
                         help="run apps built earlier with --build-only (e.g. on another OS)")
     args = parser.parse_args()
@@ -879,14 +882,28 @@ def main() -> int:
 
 def _job(name: str, args: argparse.Namespace) -> Result:
     app = APPS[name]
-    if args.run_from is not None:  # built elsewhere: <dir>/<name>.json + <dir>/<name>/
+    if args.run_from is not None:  # built elsewhere: <dir>/<name>.json + <name>/ or <name>.zip
         res = Result(**json.loads((args.run_from / f"{name}.json").read_text(encoding="utf-8")))
         if res.status != "built":
             return res
-        return run_built(res, app, args.run_from / name, args.timeout)
+        app_dir = args.run_from / name
+        archive = args.run_from / f"{name}.zip"
+        if not app_dir.is_dir() and archive.is_file():
+            import zipfile
+            with zipfile.ZipFile(archive) as zf:  # the zip's top folder is <name>/
+                zf.extractall(args.run_from)
+        return run_built(res, app, app_dir, args.timeout)
     if args.build_only:
         args.keep.mkdir(parents=True, exist_ok=True)
-        res, _ = build_app(name, app, args.python, args.keep)
+        res, app_dir = build_app(name, app, args.python, args.keep)
+        if args.archive and app_dir is not None:
+            # One file per app: CI artifacts with tens of thousands of small
+            # files (mkdocs-material's icons) failed to download on Windows.
+            import shutil
+
+            from pyxbuild.builder import write_zip
+            write_zip(app_dir, args.keep / f"{name}.zip", 0)
+            shutil.rmtree(app_dir)
         (args.keep / f"{name}.json").write_text(json.dumps(asdict(res), ensure_ascii=False),
                                                 encoding="utf-8")
         return res
