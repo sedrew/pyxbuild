@@ -12,6 +12,7 @@ and the claim "it works" always rests on a run on real Windows.
 | golden | `pytest -m golden` / `tools/golden.py` | build anywhere, run on Windows | the golden set of packages below works when built on another OS |
 | cross-host | CI `reproducibility` | ubuntu, macos-14, windows | the zips built on the three hosts have identical sha256 |
 | pip parity | `tools/compare_with_pip.py` | CI windows-latest | the installed file tree equals `pip install` of the same wheels |
+| real apps | `tools/apps_matrix.py` | build on ubuntu, run on windows-latest (CI) or Wine | 22 applications (Django, FastAPI, Streamlit, JupyterLab, Scrapy, …) do real work inside the built exe; see [APPS.md](APPS.md) |
 
 Ctrl+Break forwarding (`test_ctrl_break_...`) only runs on real Windows.
 
