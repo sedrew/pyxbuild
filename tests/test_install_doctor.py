@@ -58,9 +58,24 @@ def test_install_layout_record_and_installer(tmp_path, runtime):
 def test_install_conflicting_file_fails(tmp_path, runtime):
     from pyxbuild.errors import PyxbuildError
 
-    install_wheel(make_wheel(tmp_path / "a", "a", files={"shared/x.py": ""}), runtime)
-    with pytest.raises(PyxbuildError, match="overwrites"):
-        install_wheel(make_wheel(tmp_path / "b", "b", files={"shared/x.py": ""}), runtime)
+    install_wheel(make_wheel(tmp_path / "a", "a", files={"shared/x.py": "A = 1\n"}), runtime)
+    with pytest.raises(PyxbuildError, match="overwrites.*different content"):
+        install_wheel(make_wheel(tmp_path / "b", "b", files={"shared/x.py": "B = 1\n"}), runtime)
+
+
+def test_install_identical_shared_file_is_allowed(tmp_path, runtime):
+    # kivy_deps.sdl2 / kivy_deps.glew / kivy_deps.angle all ship the same
+    # pkgutil namespace __init__.py; pip installs them side by side.
+    init = "__path__ = __import__('pkgutil').extend_path(__path__, __name__)\n"
+    for name in ("deps.sdl2", "deps.glew"):
+        mod = name.split(".")[1]
+        install_wheel(make_wheel(tmp_path / name, name, files={
+            "deps/__init__.py": init, f"deps/{mod}/__init__.py": ""}), runtime)
+    site = runtime / "Lib" / "site-packages"
+    assert (site / "deps" / "__init__.py").read_text() == init
+    for dist in ("deps.sdl2-1.0.dist-info", "deps.glew-1.0.dist-info"):
+        record = (site / dist / "RECORD").read_text()
+        assert "deps/__init__.py,sha256=" in record  # both own it, as with pip
 
 
 @pytest.mark.parametrize(

@@ -81,6 +81,8 @@ KNOWN_ISSUES: dict[str, tuple[str, str]] = {
     "huggingface-hub": (INFO, "downloads into HF_HOME at run time; set it through "
                         "[tool.pyxbuild.env] if the app must run offline"),
     "easyocr": (WARNING, "downloads its models at run time into ~/.EasyOCR"),
+    "ansible-core": (WARNING, "does not support Windows as a control node: the CLI fails "
+                     "at start-up (os.get_blocking, fcntl, pwd); run it under WSL instead"),
     "cffi": (INFO, "API-mode modules compiled at run time (ffi.compile) need a C compiler "
              "and keep-dev-files = true; prebuilt _cffi modules are fine"),
 }

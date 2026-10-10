@@ -20,9 +20,9 @@ from pathlib import Path, PurePosixPath
 
 from installer import install
 from installer.destinations import SchemeDictionaryDestination
-from installer.records import RecordEntry
+from installer.records import Hash, RecordEntry
 from installer.sources import WheelFile
-from installer.utils import Scheme, construct_record_file
+from installer.utils import Scheme, construct_record_file, copyfileobj_with_hashing
 
 from .errors import PyxbuildError
 
@@ -61,6 +61,18 @@ class _Destination(SchemeDictionaryDestination):
         target = (root / path).resolve()
         if not target.is_relative_to(root):
             raise PyxbuildError(f"refusing wheel entry outside the install folder: {path!r}")
+        if target.exists():
+            # Several wheels may ship the same file: the ``__init__.py`` of a
+            # pkgutil-style namespace package (kivy_deps.sdl2/.glew/.angle,
+            # old zope/google packages). pip lets the last one win; identical
+            # bytes are harmless, different bytes mean two packages fight
+            # over one module (opencv-python + opencv-python-headless).
+            data = stream.read()
+            if target.read_bytes() != data:
+                raise FileExistsError(f"{path} (with different content)")
+            hash_, size = copyfileobj_with_hashing(io.BytesIO(data), io.BytesIO(),
+                                                   self.hash_algorithm)
+            return RecordEntry(path, Hash(self.hash_algorithm, hash_), size)
         return super().write_to_fs(scheme, path, stream, is_executable)
 
     def write_script(self, name: str, module: str, attr: str, section: str) -> RecordEntry:
@@ -113,7 +125,8 @@ def install_wheel(wheel_path: Path, runtime_dir: Path) -> None:
                 install(source, destination, {"INSTALLER": INSTALLER_NAME})
     except FileExistsError as exc:
         raise PyxbuildError(
-            f"{wheel_path.name} overwrites a file installed by another package: {exc}"
+            f"{wheel_path.name} overwrites a file installed by another package: {exc}",
+            hint="two dependencies provide the same module; keep only one of them",
         ) from None
     except Exception as exc:  # installer raises plain exceptions for broken wheels
         raise PyxbuildError(f"cannot install {wheel_path.name}: {exc}") from exc
