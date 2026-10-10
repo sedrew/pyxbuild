@@ -689,7 +689,10 @@ def _short(text: str, limit: int = 200) -> str:
     return msg[:limit]
 
 
-def run_app(name: str, app: App, python: str, keep: Path | None, timeout: int) -> Result:
+def build_app(name: str, app: App, python: str, dest: Path) -> tuple[Result, Path | None]:
+    """Build the wrapper for ``name``; the app folder is copied to ``dest/name``."""
+    import shutil
+
     with tempfile.TemporaryDirectory(prefix=f"pyxb-app-{name}-") as tmp:
         proj = make_project(Path(tmp), name, app, python)
         start = time.monotonic()
@@ -699,7 +702,7 @@ def run_app(name: str, app: App, python: str, keep: Path | None, timeout: int) -
         if build.returncode != 0:
             status = "expected-fail" if app.expect == "fail" else "build-error"
             return Result(name, status, _short(build.stderr), build_s,
-                          output=build.stderr[-4000:])
+                          output=build.stderr[-4000:]), None
         doctor = [ln.strip() for ln in (build.stdout + build.stderr).splitlines()
                   if ln.strip().startswith(("warning", "error", "!", "-"))][:20]
         out_dir = proj / "dist" / "appwrap-win_amd64"
@@ -707,44 +710,60 @@ def run_app(name: str, app: App, python: str, keep: Path | None, timeout: int) -
         size = sum(p.stat().st_size for p in files) / 2**20
         lock = proj / "pylock.win_amd64.toml"
         packages = lock.read_text(encoding="utf-8").count("[[packages]]") if lock.exists() else 0
-        cmd = [str(out_dir / "appwrap.exe")]
-        if sys.platform != "win32":
-            cmd.insert(0, os.environ.get("PYXBUILD_WINE", "wine"))
-        env = {**os.environ, "WINEDEBUG": "-all",
-               "APPWRAP_DUMP_AFTER": str(max(30, timeout - 60))}
-        start = time.monotonic()
-        try:
-            run = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env,
-                                 encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
-            out, err, code = run.stdout, run.stderr, run.returncode
-        except subprocess.TimeoutExpired as exc:
-            def text(v):
-                return v.decode("utf-8", "replace") if isinstance(v, bytes) else (v or "")
-            out = text(exc.stdout) + "\n" + text(exc.stderr)
-            res = Result(name, "timeout", f"no result after {timeout}s", build_s,
-                         time.monotonic() - start, size, len(files), packages=packages,
-                         doctor=doctor, output=out[-4000:])
+        target = dest / name
+        if target.exists():
+            shutil.rmtree(target)
+        shutil.copytree(out_dir, target, symlinks=True)
+    return Result(name, "built", "", build_s, 0.0, size, len(files), packages=packages,
+                  doctor=doctor), target
+
+
+def run_built(res: Result, app: App, app_dir: Path, timeout: int) -> Result:
+    """Run a built wrapper and fill in the outcome."""
+    cmd = [str(app_dir / "appwrap.exe")]
+    if sys.platform != "win32":
+        cmd.insert(0, os.environ.get("PYXBUILD_WINE", "wine"))
+    env = {**os.environ, "WINEDEBUG": "-all",
+           "APPWRAP_DUMP_AFTER": str(max(30, timeout - 60))}
+    start = time.monotonic()
+    try:
+        run = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env,
+                             encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
+        out, err, code = run.stdout, run.stderr, run.returncode
+    except subprocess.TimeoutExpired as exc:
+        def text(v):
+            return v.decode("utf-8", "replace") if isinstance(v, bytes) else (v or "")
+        res.status, res.detail = "timeout", f"no result after {timeout}s"
+        res.run_s = time.monotonic() - start
+        res.output = (text(exc.stdout) + "\n" + text(exc.stderr))[-4000:]
+        return res
+    res.run_s = time.monotonic() - start
+    ok = code == 0 and "APP-OK" in out
+    res.version = out.split("APP-OK", 1)[1].strip().split(" (")[0] if ok else ""
+    if app.expect == "fail":
+        res.status = "unexpected-ok" if ok else "expected-fail"
+    else:
+        res.status = "ok" if ok else "run-error"
+    res.detail = "" if ok else _short(err or out)
+    res.output = (out + "\n" + err)[-6000:]
+    return res
+
+
+def run_app(name: str, app: App, python: str, keep: Path | None, timeout: int) -> Result:
+    with tempfile.TemporaryDirectory(prefix="pyxb-apps-") as tmp:
+        dest = keep or Path(tmp)
+        res, app_dir = build_app(name, app, python, dest)
+        if app_dir is None:
             return res
-        run_s = time.monotonic() - start
-        if keep is not None:
-            import shutil
-            shutil.copytree(out_dir, keep / name, dirs_exist_ok=True)
-        ok = code == 0 and "APP-OK" in out
-        version = out.split("APP-OK", 1)[1].strip().split(" (")[0] if ok else ""
-        if app.expect == "fail":
-            status = "unexpected-ok" if ok else "expected-fail"
-        else:
-            status = "ok" if ok else "run-error"
-        detail = "" if ok else _short(err or out)
-        return Result(name, status, detail, build_s, run_s, size, len(files), version,
-                      packages, doctor, (out + "\n" + err)[-6000:])
+        return run_built(res, app, app_dir, timeout)
 
 
-ICON = {"ok": "✅", "expected-fail": "⛔ expected", "unexpected-ok": "❓ works",
-        "build-error": "❌ build", "run-error": "⚠️ run", "timeout": "⏱ timeout"}
+ICON = {"built": "🔨 built", "ok": "✅", "expected-fail": "⛔ expected",
+        "unexpected-ok": "❓ works", "build-error": "❌ build",
+        "run-error": "⚠️ run", "timeout": "⏱ timeout"}
 
 
-def render(results: list[Result], python: str, runner: str) -> str:
+def render(results: list[Result], python: str, runner: str, built_on: str) -> str:
     by = {r.app: r for r in results}
     lines = [
         "| application | what it is | result | version | packages | folder | build | run |",
@@ -764,7 +783,7 @@ def render(results: list[Result], python: str, runner: str) -> str:
         for r in problems:
             lines.append(f"| {r.app} | {r.status} | `{r.detail}` |")
     head = (f"Generated by `tools/apps_matrix.py` on {time.strftime('%Y-%m-%d')}: Python "
-            f"{python}, built on {platform.system()} {platform.machine()}, run on {runner}.")
+            f"{python}, built on {built_on}, run on {runner}.")
     return head + "\n\n" + "\n".join(lines) + "\n"
 
 
@@ -778,13 +797,20 @@ def main() -> int:
     parser.add_argument("--json", type=Path, help="write raw results (with output) here")
     parser.add_argument("--keep", type=Path, help="copy the built apps into this folder")
     parser.add_argument("--runner", default="Windows" if sys.platform == "win32" else "Wine")
+    parser.add_argument("--built-on", default=f"{platform.system()} {platform.machine()}")
+    parser.add_argument("--build-only", action="store_true",
+                        help="build into --keep and write <app>.json there; do not run")
+    parser.add_argument("--run-from", type=Path,
+                        help="run apps built earlier with --build-only (e.g. on another OS)")
     args = parser.parse_args()
+    if args.build_only and args.keep is None:
+        parser.error("--build-only needs --keep")
     names = [a for a in args.apps.split(",") if a]
     unknown = [a for a in names if a not in APPS]
     if unknown:
         parser.error(f"unknown application(s): {', '.join(unknown)}")
     wine = os.environ.get("PYXBUILD_WINE", "wine")
-    if sys.platform != "win32":
+    if sys.platform != "win32" and not args.build_only:
         # Start wineserver and Wine's services before the first app: they
         # outlive it and would otherwise inherit its stdout pipe, so reading
         # the app's output would never see end-of-file.
@@ -795,8 +821,7 @@ def main() -> int:
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
     results: list[Result] = []
     with cf.ThreadPoolExecutor(args.jobs) as pool:
-        futures = {pool.submit(run_app, n, APPS[n], args.python, args.keep, args.timeout): n
-                   for n in names}
+        futures = {pool.submit(_job, n, args): n for n in names}
         for fut in cf.as_completed(futures):
             name = futures[fut]
             try:
@@ -809,12 +834,29 @@ def main() -> int:
             if args.json:
                 args.json.write_text(json.dumps([asdict(r) for r in results], indent=1,
                                                 ensure_ascii=False), encoding="utf-8")
-    text = render(results, args.python, args.runner)
+    results.sort(key=lambda r: list(APPS).index(r.app))
+    text = render(results, args.python, args.runner, args.built_on)
     if args.out:
         args.out.write_text(text, encoding="utf-8")
     else:
         print(text)
-    return 0 if all(r.status in ("ok", "expected-fail") for r in results) else 1
+    return 0 if all(r.status in ("ok", "expected-fail", "built") for r in results) else 1
+
+
+def _job(name: str, args: argparse.Namespace) -> Result:
+    app = APPS[name]
+    if args.run_from is not None:  # built elsewhere: <dir>/<name>.json + <dir>/<name>/
+        res = Result(**json.loads((args.run_from / f"{name}.json").read_text(encoding="utf-8")))
+        if res.status != "built":
+            return res
+        return run_built(res, app, args.run_from / name, args.timeout)
+    if args.build_only:
+        args.keep.mkdir(parents=True, exist_ok=True)
+        res, _ = build_app(name, app, args.python, args.keep)
+        (args.keep / f"{name}.json").write_text(json.dumps(asdict(res), ensure_ascii=False),
+                                                encoding="utf-8")
+        return res
+    return run_app(name, app, args.python, args.keep, args.timeout)
 
 
 if __name__ == "__main__":
