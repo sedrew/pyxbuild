@@ -358,7 +358,7 @@ from appwrap._h import *
 def smoke():
     out = run([script("http"), "--offline", "--print=HB", "example.org/api", "name=мир"])
     assert "POST /api HTTP/1.1" in out, out
-    assert '"name": "\\u043c\\u0438\\u0440"' in out, out  # httpie escapes non-ASCII
+    assert r'"name": "\\u043c\\u0438\\u0440"' in out, out  # httpie escapes non-ASCII
     import httpie
     return httpie.__version__
 '''),
