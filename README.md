@@ -98,7 +98,7 @@ Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
 
 Documentation: [design](docs/DESIGN.md) · [testing](docs/TESTING.md) ·
 [compatibility matrix](docs/COMPATIBILITY.md) (38 packages × Python 3.11–3.14) ·
-[real applications](docs/APPS.md) (Django, FastAPI, Streamlit, JupyterLab, … — 21 of 22 work) ·
+[real applications](docs/APPS.md) (Django, FastAPI, Streamlit, JupyterLab, zig cross-compiled extensions, … — 22 of 23 work) ·
 [no wheel for the target?](docs/NO_WHEEL.md) ·
 [real-world issues and coverage](docs/REAL_WORLD_ISSUES.md) ·
 [benchmarks vs PyInstaller](docs/BENCHMARKS.md) ·

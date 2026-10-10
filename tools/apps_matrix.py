@@ -604,6 +604,40 @@ def smoke():
     import kivy_deps.angle, kivy_deps.glew, kivy_deps.sdl2  # namespace package
     return kivy.__version__
 '''),
+    "zig-cross": App(
+        ["markupsafe", "msgpack", "zstandard", "ujson", "regex", "yarl", "simplejson"],
+        kind="C/Cython/C++ extensions cross-compiled with zig (no wheels used)",
+        config={"cross-compile": ["markupsafe", "msgpack", "zstandard", "ujson", "regex",
+                                  "yarl", "propcache", "simplejson"]},
+        note="Needs pyxbuild[cross]. Every listed package is built from its sdist on the "
+             "build host, so this checks Linux/macOS (x86_64 and ARM64) -> Windows x86_64 "
+             "compilation.", smoke='''
+from appwrap._h import *
+
+def smoke():
+    import markupsafe._speedups                              # C
+    import msgpack._cmsgpack                                 # Cython + C++
+    import regex._regex                                      # C
+    import simplejson._speedups                              # C
+    import ujson                                             # C + C++ (double-conversion)
+    import yarl._quoting_c                                   # Cython
+    import zstandard                                         # C + bundled libzstd
+    import markupsafe, msgpack, regex, simplejson, yarl
+    assert zstandard.backend == "cext", zstandard.backend
+    assert str(markupsafe.escape("<b>")) == "&lt;b&gt;"
+    payload = {"name": "мир", "values": list(range(1000)), "f": 1.5}
+    packed = msgpack.packb(payload)
+    blob = zstandard.ZstdCompressor(level=10).compress(packed)
+    assert msgpack.unpackb(zstandard.ZstdDecompressor().decompress(blob)) == payload
+    assert len(blob) < len(packed)
+    assert ujson.loads(ujson.dumps(payload)) == payload
+    assert ujson.dumps(0.1) == "0.1"                         # double-conversion
+    assert simplejson.loads(simplejson.dumps(payload)) == payload
+    assert regex.findall(r"\\p{Cyrillic}+", "hello мир") == ["мир"]
+    assert yarl.URL("http://a/b c?q=д").raw_path == "/b%20c"
+    from importlib.metadata import version
+    return "zstd " + version("zstandard") + ", msgpack " + version("msgpack")
+'''),
     "ansible": App(
         ["ansible-core"], kind="automation (POSIX-only)", expect="fail",
         note="Ansible does not support Windows as a control node.", smoke='''

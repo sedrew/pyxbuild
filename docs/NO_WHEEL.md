@@ -70,7 +70,9 @@ Results on real PyPI sdists, built on Linux and run under Wine
 | multidict 7.1.0 | no sdist published | — |
 
 14 of 19 pass; every failure is reported with a reason, none produces a
-broken wheel. Limits: only the C ABI is safe across toolchains (zig links
+broken wheel. CI (`apps-build` / `apps-run`, app `zig-cross`) cross-compiles
+eight of them on Linux x86_64 and on macOS ARM64 and runs the result on
+Windows x86_64. Limits: only the C ABI is safe across toolchains (zig links
 libc++ statically; C++ objects must not cross into MSVC-built libraries);
 setup.py logic that inspects the host (`sys.platform`, compiler probes,
 `pkg-config`) sees Linux; Fortran is not supported. Run results on real

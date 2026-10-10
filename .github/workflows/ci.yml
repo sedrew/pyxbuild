@@ -158,11 +158,14 @@ jobs:
       - run: python -m pytest -m "slow and not golden" -ra
 
   apps-build:
-    name: build real applications on ubuntu (${{ matrix.group }})
-    runs-on: ubuntu-latest
+    # macos-14 is ARM64: those builds are ARM64 -> Windows x86_64 cross builds
+    name: build real applications on ${{ matrix.os }} (${{ matrix.group }})
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-14]
+        group: [web, data, cli, docs-ui, cross]
         include:
           - group: web
             apps: django,flask,fastapi,datasette,wagtail,gradio
@@ -172,16 +175,18 @@ jobs:
             apps: httpie,black,ruff,yt-dlp,poetry,virtualenv,ansible
           - group: docs-ui
             apps: mkdocs-material,sphinx,textual,pygame,kivy
+          - group: cross
+            apps: zig-cross
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -e .
+      - run: python -m pip install -e ".[cross]"
       - run: python tools/apps_matrix.py --apps ${{ matrix.apps }} --build-only --keep apps-out --jobs 3
       - uses: actions/upload-artifact@v4
         with:
-          name: apps-${{ matrix.group }}
+          name: apps-${{ matrix.os }}-${{ matrix.group }}
           path: apps-out
           # upload-artifact skips dot files by default; mkdocs-material needs
           # material/templates/.icons
@@ -189,7 +194,7 @@ jobs:
           retention-days: 3
 
   apps-run:
-    name: run real applications on windows-latest (${{ matrix.group }})
+    name: run apps built on ${{ matrix.built-on }} on windows-latest (${{ matrix.group }})
     needs: apps-build
     runs-on: windows-latest
     # upstream releases change under us; the table in the job summary is the result
@@ -197,6 +202,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        built-on: [ubuntu-latest, macos-14]
+        group: [web, data, cli, docs-ui, cross]
         include:
           - group: web
             apps: django,flask,fastapi,datasette,wagtail,gradio
@@ -206,6 +213,8 @@ jobs:
             apps: httpie,black,ruff,yt-dlp,poetry,virtualenv,ansible
           - group: docs-ui
             apps: mkdocs-material,sphinx,textual,pygame,kivy
+          - group: cross
+            apps: zig-cross
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -213,20 +222,20 @@ jobs:
           python-version: "3.12"
       - uses: actions/download-artifact@v4
         with:
-          name: apps-${{ matrix.group }}
+          name: apps-${{ matrix.built-on }}-${{ matrix.group }}
           path: apps-out
       - name: run
         shell: pwsh
         run: |
-          python tools/apps_matrix.py --apps ${{ matrix.apps }} --run-from apps-out --jobs 2 --built-on "Linux (ubuntu-latest)" --out apps-${{ matrix.group }}.md --json apps-${{ matrix.group }}.json
+          python tools/apps_matrix.py --apps ${{ matrix.apps }} --run-from apps-out --jobs 2 --built-on "${{ matrix.built-on }}" --out apps.md --json apps.json
           $code = $LASTEXITCODE
-          Get-Content apps-${{ matrix.group }}.md | Add-Content $env:GITHUB_STEP_SUMMARY
+          Get-Content apps.md | Add-Content $env:GITHUB_STEP_SUMMARY
           exit $code
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: apps-result-${{ matrix.group }}
-          path: apps-${{ matrix.group }}.*
+          name: apps-result-${{ matrix.built-on }}-${{ matrix.group }}
+          path: apps.*
 
   bench:
     name: benchmark vs PyInstaller (${{ matrix.project }}, windows-latest)
