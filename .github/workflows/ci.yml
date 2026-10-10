@@ -183,6 +183,9 @@ jobs:
         with:
           name: apps-${{ matrix.group }}
           path: apps-out
+          # upload-artifact skips dot files by default; mkdocs-material needs
+          # material/templates/.icons
+          include-hidden-files: true
           retention-days: 3
 
   apps-run:

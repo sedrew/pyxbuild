@@ -151,3 +151,21 @@ def test_post_install_scripts_are_reported(tmp_path, runtime):
     report = doctor.check_bundle(runtime.parent, runtime)
     assert any("pywin32_postinstall.py is a post-install script" in f.message
                for f in report.findings)
+
+
+def test_zip_keeps_dot_directories(tmp_path):
+    # mkdocs-material needs material/templates/.icons; tools that skip dot
+    # files (actions/upload-artifact by default) break it
+    import zipfile
+
+    from pyxbuild.builder import write_zip
+
+    app = tmp_path / "app-win_amd64"
+    icon = app / "runtime" / "Lib" / "site-packages" / "material" / ".icons" / "a.svg"
+    icon.parent.mkdir(parents=True)
+    icon.write_text("<svg/>")
+    (app / ".hidden").write_text("x")
+    write_zip(app, tmp_path / "app.zip", 0)
+    names = zipfile.ZipFile(tmp_path / "app.zip").namelist()
+    assert "app-win_amd64/runtime/Lib/site-packages/material/.icons/a.svg" in names
+    assert "app-win_amd64/.hidden" in names
