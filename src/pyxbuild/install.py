@@ -16,6 +16,7 @@ import posixpath
 import re
 import warnings
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from installer import install
@@ -40,40 +41,188 @@ def nt_scheme(runtime_dir: Path, dist_name: str) -> dict[str, str]:
     }
 
 
+# Windows file name rules (CreateFileW without the \\?\ prefix)
+_INVALID_CHARS = set('<>:"|?*') | {chr(c) for c in range(32)}
+_RESERVED_NAMES = {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"} | {
+    f"{dev}{n}" for dev in ("COM", "LPT") for n in "123456789\u00b9\u00b2\u00b3"}
+
+
+def windows_name_problem(component: str) -> str | None:
+    """Why ``component`` cannot be a file or directory name on Windows, if it cannot."""
+    bad = sorted({c for c in component if c in _INVALID_CHARS})
+    if bad:
+        return "contains " + ", ".join(repr(c) for c in bad) + ", not allowed in Windows names"
+    if component.endswith((" ", ".")):
+        return "ends with a space or a dot, which Windows strips"
+    if component.split(".", 1)[0].rstrip(" ").upper() in _RESERVED_NAMES:
+        return "is a reserved device name on Windows"
+    return None
+
+
+def _win_key(name: str) -> str:
+    """Case-insensitive key like NTFS's: simple per-character upper case (no ß -> SS)."""
+    return "".join(u if len(u := c.upper()) == 1 else c for c in name)
+
+
+class _NullWriter:
+    def write(self, data: bytes) -> int:
+        return len(data)
+
+
+@dataclass
+class CaseMerge:
+    wheel: str
+    wanted: str     # path as written in the wheel, relative to the runtime
+    existing: str   # what is already there (another wheel's spelling or the runtime's)
+    owner: str      # who created ``existing``
+
+
+class InstallState:
+    """What is installed so far, seen the way Windows sees the folder.
+
+    Windows file names are case-insensitive: ``Crypto/`` and ``crypto/`` are
+    one folder, and the first spelling wins. Linux (and case-sensitive APFS)
+    would create two, so a bundle built there differs from one built on
+    macOS/Windows and from what pip produces on the target. Every path is
+    therefore mapped onto the spelling that already exists, on every host.
+    Shared by all wheels of one application.
+    """
+
+    RUNTIME = "the Python runtime"
+
+    def __init__(self, runtime_dir: Path, excluder: Excluder | None = None) -> None:
+        self.runtime_dir = runtime_dir
+        self.excluder = excluder
+        self.case_merges: list[CaseMerge] = []
+        self.excluded: list[str] = []
+        self._names: dict[str, dict[str, str]] = {}   # dir (canonical) -> key -> name
+        self._owner: dict[str, str] = {}              # canonical path -> wheel
+
+    def _listing(self, rel_dir: str) -> dict[str, str]:
+        names = self._names.get(rel_dir)
+        if names is None:
+            d = self.runtime_dir / rel_dir if rel_dir else self.runtime_dir
+            names = {_win_key(n): n for n in sorted(os.listdir(d))} if d.is_dir() else {}
+            self._names[rel_dir] = names
+        return names
+
+    def canonical(self, rel: str, wheel: str) -> str:
+        """``rel`` (relative to the runtime) spelled as it already exists."""
+        out: list[str] = []
+        for part in rel.split("/"):
+            parent = "/".join(out)
+            names = self._listing(parent)
+            key = _win_key(part)
+            existing = names.get(key)
+            if existing is None:
+                names[key] = existing = part
+                self._owner[f"{parent}/{part}" if parent else part] = wheel
+            elif existing != part:
+                where = f"{parent}/{existing}" if parent else existing
+                self.case_merges.append(CaseMerge(
+                    wheel, f"{parent}/{part}" if parent else part, where,
+                    self._owner.get(where, self.RUNTIME)))
+            out.append(existing)
+        return "/".join(out)
+
+    def owner(self, canonical: str) -> str:
+        return self._owner.get(canonical, self.RUNTIME)
+
+    def add_findings(self, report) -> None:
+        """Report case-only clashes (doctor findings)."""
+        from . import doctor
+
+        seen: set[tuple[str, str]] = set()
+        for m in self.case_merges:
+            if (m.wanted, m.existing) in seen:
+                continue
+            seen.add((m.wanted, m.existing))
+            if m.owner not in (m.wheel, self.RUNTIME):
+                report.add(doctor.WARNING, f"{m.wheel} installs {m.wanted!r} but {m.owner} "
+                           f"already installed {m.existing!r}: names differ only by case, so "
+                           f"on Windows they are one folder/file and imports of one spelling "
+                           f"fail; keep only one of the two packages", m.wanted)
+            else:
+                report.add(doctor.INFO, f"{m.wheel} writes {m.wanted!r}, which Windows "
+                           f"stores as the existing {m.existing!r} (names differ only by "
+                           f"case)", m.wanted)
+
+
 class _Destination(SchemeDictionaryDestination):
-    """Like the base class, but RECORD paths never depend on the host OS.
+    """Like the base class, but the result never depends on the host OS.
 
     ``installer`` writes absolute paths for out-of-scheme files when it runs
     on Windows; pip writes ``../../Scripts/x.exe``. We always write the
-    relative POSIX form so the bundle is byte-identical on every host.
+    relative POSIX form so the bundle is byte-identical on every host. Paths
+    are laid out with Windows' case-insensitive rules (``InstallState``) and
+    names Windows cannot store are refused.
     """
 
     target = "win_amd64"
+
+    def __init__(self, *args, wheel: str, state: InstallState, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.wheel = wheel
+        self.state = state
+        self.skipped: set[str] = set()
 
     def write_to_fs(self, scheme: Scheme, path: str, stream, is_executable: bool):
         # Defence in depth (installer >= 1.0 checks this too): a wheel entry
         # must stay inside its scheme directory.
         parts = PurePosixPath(path.replace("\\", "/")).parts
+        # A drive letter escapes the folder; any other ':' (an NTFS stream,
+        # "file:stream") is refused below as a name Windows cannot store.
         if (not parts or ".." in parts or path.startswith(("/", "\\"))
-                or ":" in path):
+                or re.match(r"[A-Za-z]:", path)):
             raise PyxbuildError(f"refusing wheel entry outside the install folder: {path!r}")
         root = Path(self.scheme_dict[scheme]).resolve()
         target = (root / path).resolve()
         if not target.is_relative_to(root):
             raise PyxbuildError(f"refusing wheel entry outside the install folder: {path!r}")
-        if target.exists():
+
+        in_site = scheme in ("purelib", "platlib")
+        metadata = ".dist-info/" in path and path.count("/") == 1
+        excluder = self.state.excluder
+        if in_site and not metadata and excluder and excluder.matches(path):
+            # Not written at all (also lets an app drop files Windows cannot store).
+            self.skipped.add(path)
+            self.state.excluded.append(path)
+            return RecordEntry(path, None, None)
+        for part in parts:
+            problem = windows_name_problem(part)
+            if problem:
+                hint = (f'if the application does not need it, add "{path}" to '
+                        f"[tool.pyxbuild] exclude" if in_site else None)
+                raise PyxbuildError(f"{self.wheel}: cannot install {path!r} for Windows: "
+                                    f"{part!r} {problem}", hint=hint)
+
+        runtime = self.state.runtime_dir.resolve()
+        rel = target.relative_to(runtime).as_posix()
+        canonical = self.state.canonical(rel, self.wheel)
+        dest = runtime / canonical
+        if dest.exists():
             # Several wheels may ship the same file: the ``__init__.py`` of a
             # pkgutil-style namespace package (kivy_deps.sdl2/.glew/.angle,
             # old zope/google packages). pip lets the last one win; identical
             # bytes are harmless, different bytes mean two packages fight
             # over one module (opencv-python + opencv-python-headless).
             data = stream.read()
-            if target.read_bytes() != data:
-                raise FileExistsError(f"{path} (with different content)")
-            hash_, size = copyfileobj_with_hashing(io.BytesIO(data), io.BytesIO(),
+            if not dest.is_file() or dest.read_bytes() != data:
+                owner = self.state.owner(canonical)
+                case = (f" (the wheel's {rel!r} differs only by case, and Windows names are "
+                        f"case-insensitive)" if rel != canonical else "")
+                raise FileExistsError(f"{canonical} (installed by {owner}) with different "
+                                      f"content{case}")
+            hash_, size = copyfileobj_with_hashing(io.BytesIO(data), _NullWriter(),
                                                    self.hash_algorithm)
-            return RecordEntry(path, Hash(self.hash_algorithm, hash_), size)
-        return super().write_to_fs(scheme, path, stream, is_executable)
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            with open(dest, "wb") as f:
+                hash_, size = copyfileobj_with_hashing(stream, f, self.hash_algorithm)
+            if is_executable:
+                dest.chmod(dest.stat().st_mode | 0o111)
+        # RECORD keeps the wheel's spelling, as pip on Windows writes it
+        return RecordEntry(path, Hash(self.hash_algorithm, hash_), size)
 
     def write_script(self, name: str, module: str, attr: str, section: str) -> RecordEntry:
         """Console/GUI scripts of installed packages use pyxbuild's own launcher.
@@ -101,12 +250,15 @@ class _Destination(SchemeDictionaryDestination):
             rel = os.path.relpath(self.scheme_dict[file_scheme], start=self.scheme_dict[scheme])
             return rel.replace(os.sep, "/") + "/"
 
-        record_list = list(records)
+        record_list = [(s, r) for s, r in records
+                       if not (r.path in self.skipped and r.hash_ is None)]
         with construct_record_file(record_list, prefix_for_scheme) as stream:
             self.write_to_fs(scheme, record_file_path, stream, is_executable=False)
 
 
-def install_wheel(wheel_path: Path, runtime_dir: Path) -> None:
+def install_wheel(wheel_path: Path, runtime_dir: Path,
+                  state: InstallState | None = None) -> None:
+    """Install one wheel; pass the same ``state`` for every wheel of an application."""
     from packaging.utils import parse_wheel_filename
 
     name = parse_wheel_filename(wheel_path.name)[0]
@@ -115,6 +267,8 @@ def install_wheel(wheel_path: Path, runtime_dir: Path) -> None:
         interpreter="python.exe",
         script_kind="win-amd64",
         bytecode_optimization_levels=(),
+        wheel=wheel_path.name,
+        state=state if state is not None else InstallState(runtime_dir),
     )
     try:
         with warnings.catch_warnings():
@@ -123,10 +277,12 @@ def install_wheel(wheel_path: Path, runtime_dir: Path) -> None:
             warnings.filterwarnings("ignore", message="Skip installing .*__pycache__")
             with WheelFile.open(wheel_path) as source:
                 install(source, destination, {"INSTALLER": INSTALLER_NAME})
+    except PyxbuildError:
+        raise
     except FileExistsError as exc:
         raise PyxbuildError(
-            f"{wheel_path.name} overwrites a file installed by another package: {exc}",
-            hint="two dependencies provide the same module; keep only one of them",
+            f"{wheel_path.name} overwrites a file that is already installed: {exc}",
+            hint="two dependencies provide the same file; keep only one of them",
         ) from None
     except Exception as exc:  # installer raises plain exceptions for broken wheels
         raise PyxbuildError(f"cannot install {wheel_path.name}: {exc}") from exc

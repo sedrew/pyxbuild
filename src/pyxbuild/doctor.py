@@ -90,9 +90,16 @@ KNOWN_ISSUES: dict[str, tuple[str, str]] = {
 # OpenMP runtimes: two in one process -> "OMP: Error #15" or crashes
 OPENMP_DLL_RE = re.compile(r"^(libiomp5md|vcomp140|libomp(140)?(\.x86_64)?|libgomp-1)\.dll$")
 
-# MAX_PATH minus a typical install prefix such as
-# C:\Users\<user>\AppData\Local\Programs\<app>\ (about 60 characters).
-PATH_BUDGET = 260 - 60
+# Without LongPathsEnabled a full path has at most MAX_PATH - 1 = 259
+# characters, and a directory must leave room for an 8.3 name (CreateDirectoryW:
+# MAX_PATH - 12). A typical install folder such as
+# C:\Users\<user>\AppData\Local\Programs\<app>\ takes about 60 characters.
+MAX_PATH_CHARS = 259
+DIR_RESERVE = 12
+TYPICAL_PREFIX = 60
+
+# scripts that a package expects someone to run after "pip install"
+POSTINSTALL_RE = re.compile(r"post[-_]?install", re.IGNORECASE)
 
 
 @dataclass
@@ -139,8 +146,27 @@ def is_system_dll(name: str) -> bool:
     return low in SYSTEM_DLLS or low.startswith(("api-ms-win-", "ext-ms-win-"))
 
 
+def _check_path_lengths(report: Report, need: int, rel: str, typical_prefix: int) -> None:
+    """How long may the install folder be before some path exceeds MAX_PATH?"""
+    room = MAX_PATH_CHARS - need  # characters left for "C:\\...\\<app folder>\\"
+    if room >= typical_prefix:
+        return
+    advice = ("enable LongPathsEnabled on the target, shorten the path with "
+              "[tool.pyxbuild] exclude, or ship an installer that picks a short folder; "
+              "Explorer's zip extraction ignores LongPathsEnabled, and extracting into "
+              "Downloads repeats the folder name")
+    if room < len("C:\\"):
+        report.add(ERROR, f"a path in the bundle needs {need} characters, more than MAX_PATH "
+                   f"allows even directly under C:\\; it cannot be loaded on Windows without "
+                   f"LongPathsEnabled; {advice}", rel)
+    else:
+        report.add(WARNING, f"longest path needs {need} characters: without LongPathsEnabled "
+                   f"the application folder (with drive and trailing backslash) may be at "
+                   f"most {room} characters long (MAX_PATH is 260); {advice}", rel)
+
+
 def check_bundle(app_dir: Path, runtime_dir: Path, *, machine: int = pe.IMAGE_FILE_MACHINE_AMD64,
-                 path_budget: int = PATH_BUDGET) -> Report:
+                 typical_prefix: int = TYPICAL_PREFIX) -> Report:
     """Check every PE file in the bundle for unresolved DLL imports and more.
 
     A DLL import is satisfied, in the order Windows searches with Python's
@@ -153,17 +179,25 @@ def check_bundle(app_dir: Path, runtime_dir: Path, *, machine: int = pe.IMAGE_FI
     report = Report()
     pe_files: list[Path] = []
     by_name: dict[str, list[Path]] = {}
+    worst_need, worst_rel = 0, ""
+    scripts_dir = runtime_dir / "Scripts"
     for path in sorted(app_dir.rglob("*")):
         if not path.is_file():
             continue
         rel = path.relative_to(app_dir).as_posix()
-        if len(rel) > path_budget:
-            report.add(WARNING, f"path is {len(rel)} characters long; with the install "
-                       f"directory it may exceed MAX_PATH (260) on systems without "
-                       f"LongPathsEnabled", rel)
+        parent = rel.rpartition("/")[0]
+        need = max(len(rel), len(parent) + DIR_RESERVE if parent else 0)
+        if need > worst_need:
+            worst_need, worst_rel = need, rel
+        if path.parent == scripts_dir and POSTINSTALL_RE.search(path.name):
+            report.add(INFO, f"{path.name} is a post-install script that neither pip nor "
+                       f"pyxbuild runs; if the application needs what it sets up (COM "
+                       f"registration, shortcuts, downloads), do that on the target", rel)
         if path.suffix.lower() in (".dll", ".pyd", ".exe"):
             pe_files.append(path)
             by_name.setdefault(path.name.lower(), []).append(path)
+
+    _check_path_lengths(report, worst_need, worst_rel, typical_prefix)
 
     for path in pe_files:
         rel = path.relative_to(app_dir).as_posix()

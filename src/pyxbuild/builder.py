@@ -19,7 +19,7 @@ from .config import ProjectConfig
 from .download import fetch, offline_mode
 from .errors import PyxbuildError, ResolveError
 from .imports import check_imports
-from .install import Excluder, apply_excludes, install_wheel
+from .install import Excluder, InstallState, apply_excludes, install_wheel
 from .launcher import build_launcher
 from .lock import (
     LockInputs,
@@ -320,11 +320,13 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
         _log(opts, f"[{tb.target.name}] slim: removed {saved / 2**20:.1f} MB of the "
              f"standard library ({', '.join(cfg.slim)})")
     _log(opts, f"[{tb.target.name}] installing {len(tb.wheels) + 1} wheel(s)")
+    state = InstallState(runtime_dir, Excluder(cfg.exclude))
     for wheel in sorted(tb.wheels, key=lambda p: p.name.lower()):
-        install_wheel(wheel, runtime_dir)
-    install_wheel(tb.project_wheel.path, runtime_dir)
+        install_wheel(wheel, runtime_dir, state)
+    install_wheel(tb.project_wheel.path, runtime_dir, state)
     site_packages = runtime_dir / "Lib" / "site-packages"
-    removed = apply_excludes(site_packages, Excluder(cfg.exclude))
+    # excluded files are skipped while installing; this catches anything left
+    removed = state.excluded + apply_excludes(site_packages, Excluder(cfg.exclude))
     if removed:
         _log(opts, f"[{tb.target.name}] excluded {len(removed)} file(s)")
     boot_src = resources_files("pyxbuild").joinpath("_boot", "_pyxbuild_boot.py").read_bytes()
@@ -364,6 +366,7 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
                                                 encoding="utf-8", newline="\n")
     _normalize_tree(app_dir, source_date_epoch())
     report = doctor.check_bundle(app_dir, runtime_dir)
+    state.add_findings(report)
     check_imports(runtime_dir, tb.project_wheel.path, report)
     return created, report
 

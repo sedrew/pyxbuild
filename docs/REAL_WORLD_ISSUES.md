@@ -32,6 +32,10 @@ cases closed by the changes made after this review.
 | 17 | `__pycache__` not writable | [python-dev](https://www.python.org/pipermail/python-dev/2010-March/098734.html) | C now — `bytecode = true` (tested read-only) |
 | 18 | numba `cache=True` | [numba#4908](https://github.com/numba/numba/issues/4908) | P now — known issue + `env` for `NUMBA_CACHE_DIR` |
 | 19 | Package runs pip at run time | [spaCy#10895](https://github.com/explosion/spaCy/discussions/10895) | N by design (pip removed) |
+| 56 | Several wheels ship the same namespace `__init__.py` (`kivy_deps.*`) | found by `tools/apps_matrix.py` | C now — identical files allowed, as with pip; different content refused |
+| 57 | Names that differ only by case (`Crypto/` of pycryptodome vs `crypto/`): two folders on Linux, one on Windows | pycryptodome + `crypto` from PyPI | C now — installed with Windows' case-insensitive rules on every host; clashing files refused, merged folders reported |
+| 58 | Names Windows cannot store (`aux.py`, `con`, `a:b`, trailing dot/space) | Windows naming rules | C now — refused with a hint; `exclude` drops such files before they are written |
+| 59 | Post-install scripts nobody runs (`pywin32_postinstall.py`) | pip behaviour | P now — doctor reports `*postinstall*` scripts |
 
 ## Windows runtime
 
@@ -57,7 +61,7 @@ cases closed by the changes made after this review.
 | 37 | Blurry UI on high DPI | [cpython#119174](https://github.com/python/cpython/issues/119174) | C now — per-monitor DPI awareness for GUI scripts |
 | 38 | Taskbar grouping/icon is Python's | [napari#1168](https://github.com/napari/napari/issues/1168) | P now — `app-id` sets AppUserModelID; process icon is still pythonw.exe's |
 | 39 | Firewall prompt names python.exe | [spyder#11901](https://github.com/spyder-ide/spyder/issues/11901) | N |
-| 40 | MAX_PATH | [pip#10045](https://github.com/pypa/pip/issues/10045) | P — doctor warning |
+| 40 | MAX_PATH | [pip#10045](https://github.com/pypa/pip/issues/10045) | P now — doctor gives the longest install folder that still fits (directories counted with CreateDirectory's MAX_PATH − 12); error when no folder fits |
 | 41 | Non-ASCII paths | [pip#4984](https://github.com/pypa/pip/issues/4984) | C — e2e |
 | 42 | cp1252 `UnicodeEncodeError` | [rut#6](https://github.com/schettino72/rut/issues/6) | P — `utf8-mode` (off by default) |
 | 43 | zoneinfo without tzdata | [cpython#140039](https://github.com/python/cpython/issues/140039) | C now — import check warns |

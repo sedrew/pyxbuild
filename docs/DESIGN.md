@@ -55,6 +55,13 @@ Modules: `config.py`, `targets.py` (markers, tags), `runtime.py`, `lock.py`,
   for `Scripts/` when it runs on Windows; pyxbuild always writes
   `../../Scripts/x.exe` (what pip writes), so the bundle is identical on all
   hosts.
+* **Windows file-system rules on every host**: the installer maps every
+  path onto the spelling that already exists, compared case-insensitively
+  like NTFS (`Crypto/` and `crypto/` become one folder, as on Windows and
+  macOS); a file that already exists may be written again only with
+  identical bytes; names Windows cannot store (`aux.py`, `a:b`, trailing
+  dot) are refused unless `exclude` drops them, and excluded files are never
+  written. RECORD keeps each wheel's own spelling, as pip writes it.
 * **Console scripts of dependencies** use the pyxbuild launcher with
   `python=..\python.exe` instead of distlib launchers, which need an
   absolute interpreter path.
