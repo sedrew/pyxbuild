@@ -566,8 +566,10 @@ def smoke():
     rows = (tmp / "r_stats.csv").read_text().splitlines()
     total = [r for r in rows if ",Aggregated," in r][0].split(",")
     assert int(total[2]) > 5 and int(total[3]) == 0, total  # requests, failures
-    import locust
-    return locust.__version__
+    # not "import locust" here: it monkey-patches with gevent on import, which
+    # deadlocks in a process that already runs a real thread (the server)
+    from importlib.metadata import version
+    return version("locust")
 '''),
     "poetry": App(
         ["poetry"], kind="packaging tool (dulwich, keyring)", smoke='''
@@ -585,7 +587,9 @@ def smoke():
     return out.strip().split()[-1].rstrip(")")
 '''),
     "kivy": App(
-        ["kivy[base]"], kind="GUI framework (SDL2 DLL packages)", smoke='''
+        ["kivy[base]"], kind="GUI framework (SDL2 DLL packages)",
+        note="Rendering needs a window (OpenGL context); the smoke test checks that the "
+             "SDL2/ANGLE/GLEW DLL packages load.", smoke='''
 import os
 os.environ["KIVY_NO_ARGS"] = "1"
 os.environ["KIVY_NO_CONSOLELOG"] = "1"
@@ -594,13 +598,10 @@ from appwrap._h import *
 
 def smoke():
     import kivy
-    from kivy.core.text import Label as CoreLabel
-    from kivy.core.image import Image as CoreImage
-    lbl = CoreLabel(text="hi", font_size=20)
-    lbl.refresh()
-    assert lbl.texture.size[0] > 0
-    from kivy.core import text
+    from kivy.core import image, text
     assert text.Label.__name__ == "LabelSDL2", text.Label  # SDL2 from kivy_deps.sdl2
+    assert any(lo.__name__ == "ImageLoaderSDL2" for lo in image.ImageLoader.loaders)
+    import kivy_deps.angle, kivy_deps.glew, kivy_deps.sdl2  # namespace package
     return kivy.__version__
 '''),
     "ansible": App(
@@ -657,9 +658,14 @@ def make_project(dest: Path, name: str, app: App, python: str) -> Path:
     for mod, src in app.files.items():
         (pkg / f"{mod}.py").write_text(textwrap.dedent(src), encoding="utf-8")
     (pkg / "__init__.py").write_text(textwrap.dedent("""\
-        import sys, time, traceback
+        import faulthandler, os, sys, time, traceback
 
         def main():
+            # native crashes and hangs print the Python stacks of all threads
+            faulthandler.enable()
+            if os.environ.get("APPWRAP_DUMP_AFTER"):
+                faulthandler.dump_traceback_later(int(os.environ["APPWRAP_DUMP_AFTER"]),
+                                                  repeat=True)
             start = time.monotonic()
             try:
                 from appwrap.smoke import smoke
@@ -704,15 +710,17 @@ def run_app(name: str, app: App, python: str, keep: Path | None, timeout: int) -
         cmd = [str(out_dir / "appwrap.exe")]
         if sys.platform != "win32":
             cmd.insert(0, os.environ.get("PYXBUILD_WINE", "wine"))
-        env = {**os.environ, "WINEDEBUG": "-all"}
+        env = {**os.environ, "WINEDEBUG": "-all",
+               "APPWRAP_DUMP_AFTER": str(max(30, timeout - 60))}
         start = time.monotonic()
         try:
             run = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env,
                                  encoding="utf-8", errors="replace", stdin=subprocess.DEVNULL)
             out, err, code = run.stdout, run.stderr, run.returncode
         except subprocess.TimeoutExpired as exc:
-            out = (exc.stdout or b"").decode("utf-8", "replace") if isinstance(
-                exc.stdout, bytes) else (exc.stdout or "")
+            def text(v):
+                return v.decode("utf-8", "replace") if isinstance(v, bytes) else (v or "")
+            out = text(exc.stdout) + "\n" + text(exc.stderr)
             res = Result(name, "timeout", f"no result after {timeout}s", build_s,
                          time.monotonic() - start, size, len(files), packages=packages,
                          doctor=doctor, output=out[-4000:])
@@ -775,6 +783,16 @@ def main() -> int:
     unknown = [a for a in names if a not in APPS]
     if unknown:
         parser.error(f"unknown application(s): {', '.join(unknown)}")
+    wine = os.environ.get("PYXBUILD_WINE", "wine")
+    if sys.platform != "win32":
+        # Start wineserver and Wine's services before the first app: they
+        # outlive it and would otherwise inherit its stdout pipe, so reading
+        # the app's output would never see end-of-file.
+        subprocess.Popen([str(Path(wine).with_name("wineserver")), "-p"],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+        subprocess.run([wine, "cmd", "/c", "exit"], stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=300)
     results: list[Result] = []
     with cf.ThreadPoolExecutor(args.jobs) as pool:
         futures = {pool.submit(run_app, n, APPS[n], args.python, args.keep, args.timeout): n
