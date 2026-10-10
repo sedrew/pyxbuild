@@ -79,11 +79,14 @@ added builds on `macos-14` (Apple Silicon). Every app of the web, data, cli
 and cross groups built there ran on `windows-latest` exactly like the Linux
 builds (ansible failing as expected), including `zig-cross`: eight C, Cython
 and C++ extensions compiled from source with zig on an ARM64 Mac (175 s)
-and imported on x86_64 Windows. The docs-ui group did not run: its artifact
-(33 000 files, mostly mkdocs-material icons) failed to download on the
-Windows runner. CI now passes one pyxbuild zip per app instead
+and imported on x86_64 Windows. In that run the docs-ui group did not
+start: its artifact (33 000 files, mostly mkdocs-material icons) failed to
+download on the Windows runner. CI now passes one pyxbuild zip per app
 (`apps_matrix.py --build-only --archive`), which is also how users ship the
-app.
+app, and run [#25](https://github.com/sedrew/pyxbuild/actions/runs/38017635454)
+is fully green: all 23 apps built on Linux x86_64 and on macOS ARM64 run on
+Windows x86_64 (22 ok, ansible failing as expected), mkdocs-material
+included.
 
 ## What each smoke test does
 
