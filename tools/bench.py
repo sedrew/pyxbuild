@@ -125,6 +125,10 @@ def bench_pyxbuild(project: str, python: str, runs: int, work: Path, cache: Path
             exe, env = app / f"{entry}.exe", None
         info = {"build_s": round(seconds, 2), **_size(app)}
         info.update(_startup(exe, args, runs, env))
+        if name == "onefile":
+            # extraction into the cache, repeated (the first start alone is one sample)
+            redo = [_run(exe, args, {**env, "PYX_ONEFILE_RESET": "1"}) for _ in range(3)]
+            info["extract_median_s"] = round(statistics.median(redo), 3)
         out["variants"][name] = info
         if name == "default":
             # floor: the bundled interpreter doing nothing (process creation,

@@ -25,6 +25,34 @@ completion: `hello` imports requests; `level1` runs the numpy smoke check.
   bootloader unpacking/archive import layer, a plain interpreter with
   `site-packages`.
 
+## Onefile (seconds and MB, windows-latest)
+
+CI run [#28](https://github.com/sedrew/pyxbuild/actions/runs/38275951221),
+Python 3.12, `bytecode = true` for both pyxbuild variants, 7 runs.
+
+| app | variant | .exe | first start | later starts (median) |
+|---|---|---|---|---|
+| hello | pyxbuild onefile (cache) | 17.6 MB | 2.70 | **0.20** |
+| hello | pyxbuild onefile, `onefile-extract = "temp"` | 17.6 MB | 3.06 | 3.20 |
+| hello | PyInstaller `--onefile` | 11.5 MB | 1.08 | 1.02 |
+| level1 | pyxbuild onefile (cache) | 69.6 MB | 27.46 ¹ | **0.16** |
+| level1 | pyxbuild onefile, `onefile-extract = "temp"` | 69.6 MB | 11.30 | 13.78 |
+| level1 | PyInstaller `--onefile` | 49.6 MB | 4.10 | 4.10 |
+
+* With the cache, every start after the first is as fast as the folder
+  mode (0.16–0.20 s); PyInstaller onefile unpacks on every start (1.0 s for
+  hello, 4.1 s for numpy + pandas). Temp mode behaves like PyInstaller, only
+  slower: it unpacks the whole application (stdlib and complete wheels) where
+  PyInstaller unpacks only what its analysis collected.
+* The first start of the cache mode pays one extraction. ¹ 27.5 s for level1
+  is a single sample and 2.4× the temp-mode extraction of the same archive;
+  `tools/bench.py` now also reports `extract_median_s` (three extractions
+  with `PYX_ONEFILE_RESET=1`) to tell an outlier from a real cost.
+* The executable is 1.4–1.5× PyInstaller's for the same reason as the folder
+  size below; `slim` and `exclude` shrink it.
+* GitHub's runners have Defender real-time scanning turned off; on a normal
+  machine extraction (thousands of new files) will be slower.
+
 ## Size
 
 | app | variant | folder | files | zip (deflate) |
