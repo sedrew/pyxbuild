@@ -44,9 +44,13 @@ def _gui_streams(log_path):
     processes find the log through PYXBUILD_GUI_LOG.
     """
     try:
-        from _pyxbuild_streams import PLACEHOLDER
+        from _pyxbuild_streams import PLACEHOLDER, open_append
     except ImportError:
         PLACEHOLDER = None
+
+        def open_append(path):
+            return open(path, "a", encoding="utf-8", buffering=1,  # noqa: SIM115
+                        errors="backslashreplace")
     missing = [s for s in ("stdout", "stderr")
                if getattr(sys, s) is None or getattr(sys, s) is PLACEHOLDER]
     if not missing:
@@ -55,8 +59,7 @@ def _gui_streams(log_path):
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         if os.path.exists(log_path) and os.path.getsize(log_path) > _LOG_LIMIT:
             os.replace(log_path, log_path + ".1")
-        stream = open(log_path, "a", encoding="utf-8", buffering=1,  # noqa: SIM115
-                      errors="backslashreplace")
+        stream = open_append(log_path)  # shared with child processes
     except OSError:
         stream = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
         log_path = None  # do not point the user at a file that was not written

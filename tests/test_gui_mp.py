@@ -56,7 +56,8 @@ def work(results):
     with concurrent.futures.ProcessPoolExecutor(2) as ex:
         results["executor"] = sum(ex.map(square, range(5)))
     results["parent_executable"] = os.path.basename(sys.executable)
-    results["log"] = getattr(sys.stdout, "name", None)
+    results["log"] = os.environ.get("PYXBUILD_GUI_LOG")
+    results["stdout_name"] = getattr(sys.stdout, "name", None)
 
 
 def main():
@@ -175,6 +176,7 @@ def test_gui_app_with_tkinter_and_multiprocessing(mode, builds, tmp_path):
     assert results["chatty_pids"] >= 1
     # ... and end up in the app's log next to the parent's output
     assert results["log"] and results["log"].endswith("guimp.log"), results["log"]
+    assert results["stdout_name"] == results["log"]
     log = _host(results["log"]).read_text(encoding="utf-8")
     assert "stdout from worker 3" in log and "stderr from worker 0" in log
     if ON_WINDOWS:

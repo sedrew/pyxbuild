@@ -74,3 +74,24 @@ def test_gui_without_console_logs_and_reports(boot, prefix, monkeypatch):
     log = (prefix / "local" / "MyApp" / "logs" / "gui.log").read_text()
     assert "before crash" in log
     assert "ValueError: boom" in log
+
+
+def test_concurrent_log_appends_lose_no_lines(tmp_path):
+    """Several processes write the GUI log at once (multiprocessing workers):
+    on Windows the C runtime's "a" mode lets them overwrite each other."""
+    import subprocess
+
+    streams = ROOT / "src" / "pyxbuild" / "_boot"
+    log = tmp_path / "app.log"
+    code = (
+        "import sys; sys.path.insert(0, sys.argv[1]); "
+        "from _pyxbuild_streams import open_append; "
+        "f = open_append(sys.argv[2]); "
+        "[f.write(f'{sys.argv[3]} line {i}\\n') for i in range(300)]; f.close()"
+    )
+    procs = [subprocess.Popen([sys.executable, "-c", code, str(streams), str(log), f"p{n}"])
+             for n in range(6)]
+    for p in procs:
+        assert p.wait(60) == 0
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert sorted(lines) == sorted(f"p{n} line {i}" for n in range(6) for i in range(300))
