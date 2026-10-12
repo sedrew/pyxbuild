@@ -431,12 +431,25 @@ static void sweep(const wchar_t *parent, const wchar_t *prefix, const wchar_t *k
 /* A small window while a GUI app is extracted for the first time (pythonw
  * shows nothing for seconds otherwise). Shown only when extracting takes
  * longer than PROGRESS_DELAY_MS; PYX_ONEFILE_PROGRESS=0 disables it, =1 shows
- * it at once. A plain STATIC window: no window class, no C runtime. */
+ * it at once. Manifest key "progress": "modern" (default: a dialog with the
+ * themed progress bar of comctl32 v6, system font, DPI aware), "classic" (a
+ * plain STATIC window with the percentage) or "off". comctl32 is loaded at
+ * run time inside the activation context of shell32's manifest (resource
+ * 124), so the launcher needs no manifest of its own and no import of it. */
 #define PROGRESS_DELAY_MS 400
-static HWND g_progress;
+#define PYX_PBM_SETPOS (WM_USER + 2)
+#define PYX_PBM_SETRANGE32 (WM_USER + 6)
+static HWND g_progress, g_progress_label, g_progress_bar;
 static int g_progress_mode = -1; /* -1 unknown, 0 off, 1 immediate, 2 delayed */
+static int g_progress_classic;
+static int g_progress_off;
 static DWORD g_progress_start;
 static const wchar_t *g_progress_app;
+
+static void progress_style(const wchar_t *style) {
+    g_progress_classic = style && !lstrcmpW(style, L"classic");
+    g_progress_off = style && !lstrcmpW(style, L"off");
+}
 
 static void progress_pump(void) {
     MSG m;
@@ -449,33 +462,124 @@ static void progress_pump(void) {
 static void progress_begin(const wchar_t *app) {
     wchar_t v[4];
     DWORD n = GetEnvironmentVariableW(L"PYX_ONEFILE_PROGRESS", v, 4);
-    g_progress_mode = (n == 1 && v[0] == L'0') ? 0 : (n == 1 && v[0] == L'1') ? 1 : 2;
+    g_progress_mode = (n == 1 && v[0] == L'0') ? 0 : (n == 1 && v[0] == L'1') ? 1
+                      : g_progress_off ? 0 : 2;
     g_progress_start = GetTickCount();
     g_progress_app = app;
 }
 
+static HWND progress_classic(void) {
+    int w = 380, h = 72;
+    HWND hw = CreateWindowExW(
+        WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"STATIC", L"",
+        WS_POPUP | WS_BORDER | SS_CENTER | SS_CENTERIMAGE,
+        (GetSystemMetrics(SM_CXSCREEN) - w) / 2, (GetSystemMetrics(SM_CYSCREEN) - h) / 2,
+        w, h, NULL, NULL, NULL, NULL);
+    if (hw) SendMessageW(hw, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+    return hw;
+}
+
+typedef struct { DWORD size, icc; } pyx_initcc;
+typedef BOOL(WINAPI *pyx_initcc_fn)(const pyx_initcc *);
+typedef BOOL(WINAPI *pyx_dpi_ctx_fn)(HANDLE);
+typedef BOOL(WINAPI *pyx_dpi_fn)(void);
+
+static HWND progress_modern(void) {
+    wchar_t sys[MAX_PATH], dll[MAX_PATH + 16];
+    ACTCTXW act;
+    HANDLE ctx;
+    ULONG_PTR cookie;
+    HMODULE user32 = GetModuleHandleW(L"user32.dll"), comctl;
+    pyx_dpi_ctx_fn dpi_ctx = (pyx_dpi_ctx_fn)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
+    pyx_dpi_fn dpi_old = (pyx_dpi_fn)GetProcAddress(user32, "SetProcessDPIAware");
+    NONCLIENTMETRICSW ncm;
+    HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+    RECT r;
+    HDC dc;
+    int dpi = 96, w, h, pad;
+    DWORD style = WS_POPUP | WS_CAPTION, exstyle = WS_EX_TOPMOST;
+    HWND hw;
+
+    /* sharp on scaled displays (only this process; Python is a child) */
+    if (!(dpi_ctx && dpi_ctx((HANDLE)-2 /* SYSTEM_AWARE */)) && dpi_old) dpi_old();
+    dc = GetDC(NULL);
+    if (dc) {
+        dpi = GetDeviceCaps(dc, LOGPIXELSY);
+        ReleaseDC(NULL, dc);
+    }
+    if (dpi < 96) dpi = 96;
+
+    /* visual styles: comctl32 v6 */
+    UINT n = GetSystemDirectoryW(sys, MAX_PATH);
+    if (n && n < MAX_PATH) {
+        lstrcpyW(dll, sys);
+        lstrcatW(dll, L"\\shell32.dll");
+        memset(&act, 0, sizeof(act));
+        act.cbSize = sizeof(act);
+        act.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID | ACTCTX_FLAG_ASSEMBLY_DIRECTORY_VALID;
+        act.lpSource = dll;
+        act.lpAssemblyDirectory = sys;
+        act.lpResourceName = MAKEINTRESOURCEW(124);
+        ctx = CreateActCtxW(&act);
+        if (ctx != INVALID_HANDLE_VALUE) ActivateActCtx(ctx, &cookie); /* kept active */
+    }
+    comctl = LoadLibraryW(L"comctl32.dll");
+    if (comctl) {
+        pyx_initcc_fn init = (pyx_initcc_fn)GetProcAddress(comctl, "InitCommonControlsEx");
+        pyx_initcc icc = {sizeof(pyx_initcc), 0x20 /* ICC_PROGRESS_CLASS */};
+        if (init) init(&icc);
+    }
+
+    memset(&ncm, 0, sizeof(ncm));
+    ncm.cbSize = sizeof(ncm);
+    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
+        HFONT f = CreateFontIndirectW(&ncm.lfMessageFont);
+        if (f) font = f;
+    }
+
+    pad = MulDiv(16, dpi, 96);
+    w = MulDiv(420, dpi, 96);
+    h = MulDiv(84, dpi, 96);
+    r.left = 0; r.top = 0; r.right = w; r.bottom = h;
+    AdjustWindowRectEx(&r, style, FALSE, exstyle);
+    hw = CreateWindowExW(exstyle, L"#32770", g_progress_app, style,
+                         (GetSystemMetrics(SM_CXSCREEN) - (r.right - r.left)) / 2,
+                         (GetSystemMetrics(SM_CYSCREEN) - (r.bottom - r.top)) / 2,
+                         r.right - r.left, r.bottom - r.top, NULL, NULL, NULL, NULL);
+    if (!hw) return NULL;
+    g_progress_label = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
+                                       pad, pad, w - 2 * pad, MulDiv(20, dpi, 96),
+                                       hw, NULL, NULL, NULL);
+    g_progress_bar = CreateWindowExW(0, L"msctls_progress32", L"", WS_CHILD | WS_VISIBLE,
+                                     pad, MulDiv(46, dpi, 96), w - 2 * pad, MulDiv(18, dpi, 96),
+                                     hw, NULL, NULL, NULL);
+    if (g_progress_label) SendMessageW(g_progress_label, WM_SETFONT, (WPARAM)font, TRUE);
+    if (g_progress_bar) SendMessageW(g_progress_bar, PYX_PBM_SETRANGE32, 0, 1000);
+    return hw;
+}
+
 static void progress_update(ULONGLONG done, ULONGLONG total) {
     wchar_t text[300];
+    unsigned long permille = (unsigned long)(total ? done * 1000 / total : 1000);
     if (g_progress_mode <= 0) return;
     if (!g_progress) {
-        int w = 380, h = 72;
         if (g_progress_mode == 2 && GetTickCount() - g_progress_start < PROGRESS_DELAY_MS)
             return;
-        g_progress = CreateWindowExW(
-            WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"STATIC", L"",
-            WS_POPUP | WS_BORDER | SS_CENTER | SS_CENTERIMAGE,
-            (GetSystemMetrics(SM_CXSCREEN) - w) / 2, (GetSystemMetrics(SM_CYSCREEN) - h) / 2,
-            w, h, NULL, NULL, NULL, NULL);
+        g_progress = g_progress_classic ? progress_classic() : progress_modern();
         if (!g_progress) { /* no desktop (service, headless): carry on silently */
             g_progress_mode = 0;
             return;
         }
-        SendMessageW(g_progress, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
         ShowWindow(g_progress, SW_SHOWNOACTIVATE);
     }
     wsprintfW(text, L"Preparing %.200s for its first start… %lu%%", g_progress_app,
-              (unsigned long)(total ? done * 100 / total : 100));
-    SetWindowTextW(g_progress, text);
+              permille / 10);
+    if (g_progress_classic) {
+        SetWindowTextW(g_progress, text);
+    } else {
+        if (g_progress_label) SetWindowTextW(g_progress_label, text);
+        if (g_progress_bar) SendMessageW(g_progress_bar, PYX_PBM_SETPOS, permille, 0);
+    }
     UpdateWindow(g_progress);
     progress_pump();
 }
@@ -489,6 +593,7 @@ static void progress_end(void) {
 }
 #else
 #define progress_begin(app) ((void)(app))
+#define progress_style(style) ((void)(style))
 #define progress_update(done, total) ((void)(done), (void)(total))
 #define progress_end() ((void)0)
 #endif
@@ -739,6 +844,7 @@ static wchar_t *onefile_root(const wchar_t *exe, const char *payload, wchar_t **
     HANDLE f;
     int i;
     *temp_dir = NULL;
+    progress_style(manifest_get(payload, "progress"));
     if (!hash || lstrlenW(hash) < 12 || !app || !*app)
         fail(L"corrupt onefile manifest", exe);
     for (i = 0; i < 12; i++) short_hash[i] = hash[i];

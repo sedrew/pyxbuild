@@ -15,7 +15,7 @@ import pytest
 from conftest import run_exe, wine_available, wine_command
 from pyxbuild import cli
 from pyxbuild.config import load_config
-from pyxbuild.errors import ConfigError
+from pyxbuild.errors import ConfigError, PyxbuildError
 from pyxbuild.launcher import decode_manifest, write_onefile
 from pyxbuild.onefile import CHUNK, ENTRY, HEADER, MAGIC, read_archive, write_archive
 
@@ -85,6 +85,25 @@ def test_onefile_extract_option_is_validated(tmp_path):
         '[project]\nname = "a"\nversion = "1"\n[project.scripts]\na = "a:main"\n'
         '[tool.pyxbuild]\nmode = "onefile"\nonefile-extract = "ram"\n')
     with pytest.raises(ConfigError, match="onefile-extract"):
+        load_config(tmp_path)
+
+
+def test_onefile_progress_style(tmp_path):
+    from pyxbuild.config import EntryPoint
+
+    _tree(tmp_path / "app")
+    info = write_archive(tmp_path / "app", tmp_path / "a.pyxarc")
+    gui = EntryPoint("app1", "app", "main", gui=True)
+    write_onefile(tmp_path / "m.exe", gui, "win_amd64", info, app="demo")
+    assert "progress" not in decode_manifest((tmp_path / "m.exe").read_bytes())  # modern
+    write_onefile(tmp_path / "c.exe", gui, "win_amd64", info, app="demo", progress="classic")
+    assert decode_manifest((tmp_path / "c.exe").read_bytes())["progress"] == "classic"
+    with pytest.raises(PyxbuildError, match="progress"):
+        write_onefile(tmp_path / "x.exe", gui, "win_amd64", info, app="demo", progress="fancy")
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "a"\nversion = "1"\n[project.scripts]\na = "a:main"\n'
+        '[tool.pyxbuild]\nmode = "onefile"\nonefile-progress = "fancy"\n')
+    with pytest.raises(ConfigError, match="onefile-progress"):
         load_config(tmp_path)
 
 

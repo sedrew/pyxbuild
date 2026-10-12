@@ -102,7 +102,12 @@ files from disk, so the launcher extracts it:
   later start).
 
 GUI apps show a small progress window while the first extraction runs
-(only if it takes longer than 0.4 s; `PYX_ONEFILE_PROGRESS=0` turns it off):
+(only if it takes longer than 0.4 s; `PYX_ONEFILE_PROGRESS=0` turns it off).
+`onefile-progress = "modern"` (default) is a window with the application's
+name, the system font and the themed Windows progress bar, sharp on scaled
+displays; `"classic"` is a plain box with the percentage, `"off"` shows
+nothing (screenshot under Wine, which draws the bar without the Windows
+theme):
 
 ![Progress window of a onefile GUI app](docs/images/onefile-progress.png)
 

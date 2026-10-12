@@ -34,7 +34,7 @@ _KNOWN_KEYS = {
     "dist-dir", "index-url", "extra-index-urls", "find-links", "allow-sdist",
     "cross-compile", "pure-python", "extras", "scripts", "slim", "bytecode",
     "env", "clean-env", "app-id", "truststore", "gui-log", "dpi-aware", "keep-dev-files",
-    "version-info", "utf8-mode", "onefile-extract",
+    "version-info", "utf8-mode", "onefile-extract", "onefile-progress",
 }
 
 
@@ -70,6 +70,7 @@ class ProjectConfig:
     runtime: str = "python-build-standalone"
     mode: str = "folder"
     onefile_extract: str = "cache"  # "cache": once per version; "temp": every start
+    onefile_progress: str = "modern"  # first-extraction window: "modern", "classic", "off"
     icon: Path | None = None
     lock: Path | None = None
     exclude: list[str] = field(default_factory=list)
@@ -265,6 +266,10 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
         cfg.onefile_extract = _str(tool["onefile-extract"], "onefile-extract")
         if cfg.onefile_extract not in ("cache", "temp"):
             raise ConfigError('onefile-extract must be "cache" or "temp"')
+    if "onefile-progress" in tool:
+        cfg.onefile_progress = _str(tool["onefile-progress"], "onefile-progress")
+        if cfg.onefile_progress not in ("modern", "classic", "off"):
+            raise ConfigError('onefile-progress must be "modern", "classic" or "off"')
     if "icon" in tool:
         cfg.icon = root / _str(tool["icon"], "icon")
     if "lock" in tool:

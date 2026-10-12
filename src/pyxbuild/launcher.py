@@ -120,7 +120,7 @@ def build_launcher(entry: EntryPoint, target: str, *, python_rel: str,
 
 
 def write_onefile(dest, entry: EntryPoint, target: str, archive, *, app: str,
-                  extract: str = "cache", utf8_mode: bool = False,
+                  extract: str = "cache", utf8_mode: bool = False, progress: str = "modern",
                   resources: dict[int, dict[int, bytes]] | None = None) -> None:
     """Write a onefile launcher: stub (+ resources) + archive + manifest.
 
@@ -132,6 +132,8 @@ def write_onefile(dest, entry: EntryPoint, target: str, archive, *, app: str,
 
     if extract not in ("cache", "temp"):
         raise PyxbuildError(f"unknown onefile extraction mode {extract!r}")
+    if progress not in ("modern", "classic", "off"):
+        raise PyxbuildError(f"unknown progress window style {progress!r}")
     stub = stub_bytes(target, entry.gui, onefile=True)
     if resources:
         from .resources import add_resources
@@ -148,6 +150,8 @@ def write_onefile(dest, entry: EntryPoint, target: str, archive, *, app: str,
         "archive-size": str(archive.size),
         "extract": extract,
     }
+    if entry.gui and progress != "modern":
+        fields["progress"] = progress
     with open(dest, "wb") as out:
         out.write(stub)
         with open(archive.path, "rb") as src:
