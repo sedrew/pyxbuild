@@ -101,6 +101,11 @@ files from disk, so the launcher extracts it:
   deleted when the application exits (folders of killed runs are swept on a
   later start).
 
+GUI apps show a small progress window while the first extraction runs
+(only if it takes longer than 0.4 s; `PYX_ONEFILE_PROGRESS=0` turns it off):
+
+![Progress window of a onefile GUI app](docs/images/onefile-progress.png)
+
 Combine it with `bytecode = true` for a fast first start. `{app_dir}` in
 `[tool.pyxbuild.env]` is the extracted folder (bundled data), `{exe_dir}` the
 folder of the `.exe`. `pyxbuild sign dist/myapp.exe` signs it, archive

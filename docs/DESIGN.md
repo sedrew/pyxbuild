@@ -133,6 +133,11 @@ newest one, and abandoned `.tmp-`/trash folders older than ten minutes.
 Folders are renamed to `.pyx-trash-*` before deletion, which Windows refuses
 while a program runs from them.
 
+GUI launchers show a STATIC popup window ("Preparing <app> for its first
+start… N%") when an extraction runs longer than 0.4 s, pumping messages
+between chunks; no window when there is no desktop. `PYX_ONEFILE_PROGRESS`:
+`0` off, `1` at once.
+
 Temp mode: `%TEMP%\pyx-<app>-<pid>-<tick>\`, deleted after the child exits;
 our folders older than ten minutes are swept at start.
 

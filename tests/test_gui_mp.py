@@ -158,7 +158,10 @@ def builds(tmp_path_factory, shared_cache):
 @pytest.mark.parametrize("mode", ["folder", "onefile"])
 def test_gui_app_with_tkinter_and_multiprocessing(mode, builds, tmp_path):
     out = tmp_path / "result.json"
-    env = {"PYX_ONEFILE_DIR": _win(tmp_path / "pyx"), "PYXBUILD_BOOT_NO_DIALOG": "1"}
+    env = {"PYX_ONEFILE_DIR": _win(tmp_path / "pyx"), "PYXBUILD_BOOT_NO_DIALOG": "1",
+           # show the extraction progress window at once (onefile, GUI): on
+           # Windows it must not hang or steal the run; headless it is skipped
+           "PYX_ONEFILE_PROGRESS": "1"}
     proc = run_exe(builds["python"], "-I", _win(builds["helper"]), _win(builds[mode]),
                    _win(out), env=env, timeout=900)
     assert proc.returncode == 0, proc.stderr

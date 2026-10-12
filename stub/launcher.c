@@ -427,6 +427,72 @@ static void sweep(const wchar_t *parent, const wchar_t *prefix, const wchar_t *k
     HeapFree(GetProcessHeap(), 0, pattern);
 }
 
+#ifdef PYX_GUI
+/* A small window while a GUI app is extracted for the first time (pythonw
+ * shows nothing for seconds otherwise). Shown only when extracting takes
+ * longer than PROGRESS_DELAY_MS; PYX_ONEFILE_PROGRESS=0 disables it, =1 shows
+ * it at once. A plain STATIC window: no window class, no C runtime. */
+#define PROGRESS_DELAY_MS 400
+static HWND g_progress;
+static int g_progress_mode = -1; /* -1 unknown, 0 off, 1 immediate, 2 delayed */
+static DWORD g_progress_start;
+static const wchar_t *g_progress_app;
+
+static void progress_pump(void) {
+    MSG m;
+    while (PeekMessageW(&m, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessageW(&m);
+    }
+}
+
+static void progress_begin(const wchar_t *app) {
+    wchar_t v[4];
+    DWORD n = GetEnvironmentVariableW(L"PYX_ONEFILE_PROGRESS", v, 4);
+    g_progress_mode = (n == 1 && v[0] == L'0') ? 0 : (n == 1 && v[0] == L'1') ? 1 : 2;
+    g_progress_start = GetTickCount();
+    g_progress_app = app;
+}
+
+static void progress_update(ULONGLONG done, ULONGLONG total) {
+    wchar_t text[300];
+    if (g_progress_mode <= 0) return;
+    if (!g_progress) {
+        int w = 380, h = 72;
+        if (g_progress_mode == 2 && GetTickCount() - g_progress_start < PROGRESS_DELAY_MS)
+            return;
+        g_progress = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"STATIC", L"",
+            WS_POPUP | WS_BORDER | SS_CENTER | SS_CENTERIMAGE,
+            (GetSystemMetrics(SM_CXSCREEN) - w) / 2, (GetSystemMetrics(SM_CYSCREEN) - h) / 2,
+            w, h, NULL, NULL, NULL, NULL);
+        if (!g_progress) { /* no desktop (service, headless): carry on silently */
+            g_progress_mode = 0;
+            return;
+        }
+        SendMessageW(g_progress, WM_SETFONT, (WPARAM)GetStockObject(DEFAULT_GUI_FONT), TRUE);
+        ShowWindow(g_progress, SW_SHOWNOACTIVATE);
+    }
+    wsprintfW(text, L"Preparing %.200s for its first start… %lu%%", g_progress_app,
+              (unsigned long)(total ? done * 100 / total : 100));
+    SetWindowTextW(g_progress, text);
+    UpdateWindow(g_progress);
+    progress_pump();
+}
+
+static void progress_end(void) {
+    if (g_progress) {
+        DestroyWindow(g_progress);
+        g_progress = NULL;
+        progress_pump();
+    }
+}
+#else
+#define progress_begin(app) ((void)(app))
+#define progress_update(done, total) ((void)(done), (void)(total))
+#define progress_end() ((void)0)
+#endif
+
 typedef struct {
     const wchar_t *dest; /* "\\?\" form */
     HANDLE out;
@@ -522,15 +588,18 @@ static void feed(xstate *x, const unsigned char *p, DWORD len) {
     }
 }
 
-static void extract(HANDLE f, ULONGLONG off, ULONGLONG size, const wchar_t *dest) {
+static void extract(HANDLE f, ULONGLONG off, ULONGLONG size, const wchar_t *dest,
+                    const wchar_t *app) {
     unsigned char hdr[ARC_HEADER];
     unsigned char *table, *cbuf, *ubuf;
     DWORD chunks, files, i, maxc = 0, maxu = 0;
+    ULONGLONG total, done = 0;
     xstate *x;
     if (size < ARC_HEADER || !read_at(f, (LONGLONG)off, hdr, ARC_HEADER) ||
         memcmp(hdr, ARC_MAGIC, 8) != 0 || le32(hdr + 8) != 1)
         fail(L"corrupt onefile archive", NULL);
     chunks = le32(hdr + 12);
+    total = le64(hdr + 16);
     files = le32(hdr + 24);
     if ((ULONGLONG)chunks * ARC_ENTRY > size - ARC_HEADER)
         fail(L"corrupt onefile archive", NULL);
@@ -551,6 +620,7 @@ static void extract(HANDLE f, ULONGLONG off, ULONGLONG size, const wchar_t *dest
     memset(x, 0, sizeof(xstate));
     x->dest = dest;
     mkdirs((wchar_t *)dest);
+    progress_begin(app);
     for (i = 0; i < chunks; i++) {
         const unsigned char *e = table + (size_t)i * ARC_ENTRY;
         DWORD c = le32(e + 8), u = le32(e + 12);
@@ -563,7 +633,10 @@ static void extract(HANDLE f, ULONGLONG off, ULONGLONG size, const wchar_t *dest
         } else {
             fail(L"corrupt onefile archive (bad chunk)", NULL);
         }
+        done += u;
+        progress_update(done, total);
     }
+    progress_end();
     if (x->out != NULL || x->hdrlen != 0 || x->files != files)
         fail(L"corrupt onefile archive (incomplete)", NULL);
     HeapFree(GetProcessHeap(), 0, x);
@@ -641,7 +714,7 @@ static wchar_t *onefile_root(const wchar_t *exe, const char *payload, wchar_t **
         root = wjoin3(tmp, L"\\", prefix);
         root = wjoin3(root, name, L"");
         xroot = long_form(root);
-        extract(f, off, size, xroot);
+        extract(f, off, size, xroot, app);
         CloseHandle(f);
         *temp_dir = xroot;
         return root;
@@ -679,7 +752,7 @@ static wchar_t *onefile_root(const wchar_t *exe, const char *payload, wchar_t **
                 if (exists(xroot)) trash(xroot, xappdir); /* incomplete */
                 wsprintfW(suffix, L".tmp-%lx-%lx", GetCurrentProcessId(), GetTickCount());
                 xtmp = wjoin3(xroot, suffix, L"");
-                extract(f, off, size, xtmp);
+                extract(f, off, size, xtmp, app);
                 write_marker(xtmp, hash);
                 if (!MoveFileExW(xtmp, xroot, 0)) {
                     if (!exists(marker)) fail(L"cannot install the extracted application", root);
