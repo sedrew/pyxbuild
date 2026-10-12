@@ -141,6 +141,25 @@ between chunks; no window when there is no desktop. `PYX_ONEFILE_PROGRESS`:
 Temp mode: `%TEMP%\pyx-<app>-<pid>-<tick>\`, deleted after the child exits;
 our folders older than ten minutes are swept at start.
 
+Patch executables (`src/pyxbuild/patch.py`): the onefile console stub with
+an archive holding `patch.json`, `blobs/<sha256>` and
+`_pyxbuild_patch.py`, and the extra manifest key `patch-base` (archive hash
+of the version it applies to). The launcher refuses to run unless
+`<base>\<app>\<base12>\.pyx-complete` exists, extracts the payload to
+`%TEMP%`, and runs the base version's `runtime\python.exe` with
+`PYX_PATCH_PAYLOAD`, `PYX_PATCH_APPDIR`, `PYX_PATCH_EXE`. `patch.json`
+(format 1) lists `keep` (paths whose content is unchanged, checked together
+by `keep_sha256`, the sha256 of their concatenated hex digests), `wheels`
+(url, sha256, size) and `files` for everything else, each from `base`
+(another path of the old version), `payload` or `wheel` (index, member).
+The new version is assembled in `<target12>.tmp-<pid>-patch` under the
+target's mutex and renamed into place; then `.pyx-next` in the base folder
+(and in folders that pointed at the base) names `<target12>`. A cache-mode
+start follows `.pyx-next` (up to 16 hops) to a complete folder, so older
+executables run the newest installed version. Applying a patch removes no
+versions; the next extraction by a full executable sweeps as usual (an old
+executable whose folder was swept extracts itself again).
+
 ## Environment variables
 
 | variable | effect |

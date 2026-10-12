@@ -681,12 +681,57 @@ static wchar_t *full_path(const wchar_t *p) {
     return r;
 }
 
+/* A patch (see src/pyxbuild/patch.py) assembles a newer version next to the
+ * one it was made for and writes "<newer hash12>" into the older folder's
+ * .pyx-next: an older executable then runs the newest patched version. */
+static wchar_t *follow_next(const wchar_t *appdir, wchar_t *root) {
+    int hops;
+    for (hops = 0; hops < 16; hops++) {
+        wchar_t *next_file = wjoin3(long_form(root), L"\\.pyx-next", L"");
+        char text[16];
+        wchar_t name[13], *candidate;
+        DWORD got = 0;
+        int i;
+        HANDLE h = CreateFileW(next_file, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                               NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h == INVALID_HANDLE_VALUE) break;
+        if (!ReadFile(h, text, 12, &got, NULL)) got = 0;
+        CloseHandle(h);
+        if (got != 12) break;
+        for (i = 0; i < 12; i++) {
+            char c = text[i];
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) break;
+            name[i] = (wchar_t)c;
+        }
+        if (i != 12) break;
+        name[12] = 0;
+        candidate = wjoin3(appdir, L"\\", name);
+        if (!exists(wjoin3(long_form(candidate), L"\\.pyx-complete", L"")))
+            break; /* a patch that did not complete: keep this version */
+        root = candidate;
+    }
+    return root;
+}
+
+static wchar_t *temp_folder(const wchar_t *app, const wchar_t *kind) {
+    wchar_t tmp[MAX_PATH + 1], name[64];
+    DWORD n = GetTempPathW(MAX_PATH + 1, tmp);
+    wchar_t *prefix;
+    if (n == 0 || n > MAX_PATH) fail(L"no temporary folder", NULL);
+    if (n > 3 && tmp[n - 1] == L'\\') tmp[n - 1] = 0;
+    prefix = wjoin3(L"pyx-", app, kind);
+    sweep(tmp, prefix, NULL); /* folders left by killed runs */
+    wsprintfW(name, L"%lx-%lx", GetCurrentProcessId(), GetTickCount());
+    return wjoin3(wjoin3(tmp, L"\\", prefix), name, L"");
+}
+
 /* Extract (or find) the application; returns its folder (plain form) and
  * sets *temp_dir to the "\\?\" folder to delete after the run, if any. */
 static wchar_t *onefile_root(const wchar_t *exe, const char *payload, wchar_t **temp_dir) {
     wchar_t *hash = manifest_get(payload, "onefile");
     wchar_t *app = manifest_get(payload, "app");
     wchar_t *mode = manifest_get(payload, "extract");
+    wchar_t *patch_base = manifest_get(payload, "patch-base");
     ULONGLONG off = parse_u64(manifest_get(payload, "archive-offset"));
     ULONGLONG size = parse_u64(manifest_get(payload, "archive-size"));
     wchar_t short_hash[13];
@@ -702,17 +747,8 @@ static wchar_t *onefile_root(const wchar_t *exe, const char *payload, wchar_t **
                     OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (f == INVALID_HANDLE_VALUE) fail(L"cannot open itself", exe);
 
-    if (mode && !lstrcmpW(mode, L"temp")) {
-        wchar_t tmp[MAX_PATH + 1], name[64];
-        DWORD n = GetTempPathW(MAX_PATH + 1, tmp);
-        wchar_t *prefix;
-        if (n == 0 || n > MAX_PATH) fail(L"no temporary folder", NULL);
-        if (n > 3 && tmp[n - 1] == L'\\') tmp[n - 1] = 0;
-        prefix = wjoin3(L"pyx-", app, L"-");
-        sweep(tmp, prefix, NULL); /* folders left by killed runs */
-        wsprintfW(name, L"%lx-%lx", GetCurrentProcessId(), GetTickCount());
-        root = wjoin3(tmp, L"\\", prefix);
-        root = wjoin3(root, name, L"");
+    if (mode && !lstrcmpW(mode, L"temp") && !patch_base) {
+        root = temp_folder(app, L"-");
         xroot = long_form(root);
         extract(f, off, size, xroot, app);
         CloseHandle(f);
@@ -733,6 +769,30 @@ static wchar_t *onefile_root(const wchar_t *exe, const char *payload, wchar_t **
         base = wjoin3(local, L"\\pyx", L"");
     }
     appdir = wjoin3(base, L"\\", app);
+
+    if (patch_base) {
+        /* An update: the archive holds the patch; the installed version it
+         * was made for runs _pyxbuild_patch from it. */
+        wchar_t base_hash[13], *xtmp, *tmp;
+        if (lstrlenW(patch_base) < 12) fail(L"corrupt patch manifest", exe);
+        for (i = 0; i < 12; i++) base_hash[i] = patch_base[i];
+        base_hash[12] = 0;
+        root = wjoin3(appdir, L"\\", base_hash);
+        if (!exists(wjoin3(long_form(root), L"\\.pyx-complete", L"")))
+            fail(L"this update is for a version of the application that is not installed "
+                 L"here; start the application once, or install the full version",
+                 root);
+        tmp = temp_folder(app, L"-patch-");
+        xtmp = long_form(tmp);
+        extract(f, off, size, xtmp, app);
+        CloseHandle(f);
+        SetEnvironmentVariableW(L"PYX_PATCH_PAYLOAD", tmp);
+        SetEnvironmentVariableW(L"PYX_PATCH_APPDIR", appdir);
+        SetEnvironmentVariableW(L"PYX_PATCH_EXE", exe);
+        *temp_dir = xtmp;
+        return root;
+    }
+
     root = wjoin3(appdir, L"\\", short_hash);
     xroot = long_form(root);
     {
@@ -767,7 +827,7 @@ static wchar_t *onefile_root(const wchar_t *exe, const char *payload, wchar_t **
         }
     }
     CloseHandle(f);
-    return root;
+    return follow_next(appdir, root);
 }
 #endif /* PYX_ONEFILE */
 

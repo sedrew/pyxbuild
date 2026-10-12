@@ -112,6 +112,30 @@ folder of the `.exe`. `pyxbuild sign dist/myapp.exe` signs it, archive
 included. The launcher stays free of the C runtime (17 KB, its own DEFLATE
 decoder).
 
+### Updates (patch executables)
+
+Users of a onefile app (cache mode) do not need to download the whole new
+executable again:
+
+```
+pyxbuild patch --from v1/myapp.exe --to dist/myapp.exe     # -> myapp-update-2.0.exe
+```
+
+writes a small executable with only what changed: files whose content the
+installed version already has (at any path) are reused, the rest travels in
+the patch. With `--fetch-public` the files of public wheels from the lock file
+(`--lock`, default `pylock.win_amd64.toml`) are not carried; the patch
+downloads those wheels from their URLs when it runs and checks their sha256.
+Your own code and private/local wheels always travel inside the patch.
+
+Running the patch builds the new version next to the installed one (reused
+files are hard-linked after checking their hashes; every written file is
+checked), with the installed version's Python, so the result is the folder
+the new full executable would extract. The old `myapp.exe` then starts the
+new version, and the new `myapp.exe` finds it ready. A patch for a version
+that is not installed on that computer says so and changes nothing. A change
+of only your code makes a patch of a few tens of KB.
+
 ### Monorepos
 
 Dependencies on sibling packages through uv's `[tool.uv.sources]` work:

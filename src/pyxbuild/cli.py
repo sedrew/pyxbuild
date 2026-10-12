@@ -1,4 +1,4 @@
-"""Command line interface: ``pyxbuild build | lock | doctor | sign``."""
+"""Command line interface: ``pyxbuild build | lock | doctor | sign | patch``."""
 
 from __future__ import annotations
 
@@ -57,6 +57,20 @@ def _parser() -> argparse.ArgumentParser:
     s.add_argument("--timestamp-url", help="RFC 3161 timestamp server")
     s.add_argument("--description")
     s.add_argument("--url")
+
+    pt = sub.add_parser("patch", help="update executable with only the changes between "
+                                      "two onefile builds")
+    pt.add_argument("--from", dest="base", required=True, type=Path,
+                    help="the onefile .exe users have installed")
+    pt.add_argument("--to", dest="target", required=True, type=Path,
+                    help="the new onefile .exe")
+    pt.add_argument("-o", "--output", type=Path,
+                    help="patch file (default: <app>-update-<version>.exe next to --to)")
+    pt.add_argument("--fetch-public", action="store_true",
+                    help="download changed public wheels (URLs in the lock file) when the "
+                         "patch runs instead of carrying their files")
+    pt.add_argument("--lock", type=Path, default=Path("pylock.win_amd64.toml"),
+                    help="lock file of the new build (for --fetch-public)")
     return parser
 
 
@@ -93,6 +107,8 @@ def _run(args: argparse.Namespace) -> int:
 
     if args.command == "sign":
         return _sign(args)
+    if args.command == "patch":
+        return _patch(args)
     cfg = load_config(args.project)
     if args.python and args.python not in SUPPORTED_PYTHONS:
         raise PyxbuildError(f"unsupported --python {args.python}",
@@ -118,6 +134,31 @@ def _run(args: argparse.Namespace) -> int:
             status |= bool(report.errors)
         return status
     raise AssertionError(args.command)
+
+
+def _patch(args: argparse.Namespace) -> int:
+    import json
+
+    from .patch import _onefile, make_patch, public_wheels
+
+    wheels = None
+    if args.fetch_public:
+        if not args.lock.is_file():
+            raise PyxbuildError(f"lock file {args.lock} not found",
+                                hint="pass --lock with the new build's pylock file")
+        _, files = _onefile(args.target)
+        python = json.loads(files["runtime/pyxbuild.json"])["python"]
+        wheels = public_wheels(args.lock, python)
+    out = args.output
+    if out is None:
+        manifest, files = _onefile(args.target)
+        version = json.loads(files["runtime/pyxbuild.json"])["project"]["version"]
+        out = args.target.with_name(f"{manifest['app']}-update-{version}.exe")
+    info = make_patch(args.base, args.target, out, wheels=wheels)
+    print(f"{info.path} ({info.size / 1024:.0f} KB): {info.app} {info.version}; "
+          f"{info.reused} file(s) reused, {info.carried} carried "
+          f"({info.carried_bytes / 1024:.0f} KB), {info.fetched} downloaded when applied")
+    return 0
 
 
 def _sign(args: argparse.Namespace) -> int:
