@@ -59,7 +59,8 @@ def main() -> int:
     py = lock["tool"]["pyxbuild"]["python"]
     minor = ".".join(py.split(".")[:2])
     env = WIN_AMD64.marker_environment(py)
-    selections = select_files(read_lock(lock_path), WIN_AMD64, env, WIN_AMD64.tags(minor))
+    selections = [s for s in select_files(read_lock(lock_path), WIN_AMD64, env,
+                                          WIN_AMD64.tags(minor)) if s.file is not None]
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         with zipfile.ZipFile(app_zip) as zf:

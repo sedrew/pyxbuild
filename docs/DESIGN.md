@@ -62,6 +62,10 @@ Modules: `config.py`, `targets.py` (markers, tags), `runtime.py`, `lock.py`,
   identical bytes; names Windows cannot store (`aux.py`, `a:b`, trailing
   dot) are refused unless `exclude` drops them, and excluded files are never
   written. RECORD keeps each wheel's own spelling, as pip writes it.
+* **Local packages** (`local.py`): uv workspace members and `path` sources
+  named in `[tool.uv.sources]` are built from the checkout like the project
+  wheel and installed with it; the resolver only sees their dependencies, so
+  the lock file never contains machine-specific local paths for them.
 * **Console scripts of dependencies** use the pyxbuild launcher with
   `python=..\python.exe` instead of distlib launchers, which need an
   absolute interpreter path.

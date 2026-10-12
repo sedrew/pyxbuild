@@ -84,6 +84,24 @@ pyxbuild sign dist/myapp-win_amd64 --cert cert.pfx --password-env PFX_PASSWORD
 Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
 `--offline` builds from the download cache only.
 
+### Monorepos
+
+Dependencies on sibling packages through uv's `[tool.uv.sources]` work:
+`{ workspace = true }` (members of the uv workspace above the project) and
+`{ path = "../tools" }` (a folder or a `.whl`). pyxbuild builds those packages
+from the checkout like the project itself, installs them next to it and
+resolves only their dependencies, so the lock never names them and stays
+portable. `directory` entries of a PEP 751 lock exported by another tool
+(`uv export --format pylock.toml`) are built the same way. Local packages must
+be pure Python (a package with compiled code: build its `win_amd64` wheel in
+CI and add it through `find-links`).
+
+Files found through `find-links` are written to the lock as paths relative to
+the lock file, also above the project (`find-links = ["../../wheels"]` →
+`path = "../../wheels/x.whl"`), so `--frozen` works on any checkout with the
+same layout. Only a folder on another Windows drive is kept as an absolute
+`file://` URL.
+
 ## Limits
 
 * Every dependency needs a `win_amd64`, `abi3` or pure-Python wheel on the

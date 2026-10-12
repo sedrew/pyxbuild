@@ -16,7 +16,7 @@ and the claim "it works" always rests on a run on real Windows.
 
 Ctrl+Break forwarding (`test_ctrl_break_...`) only runs on real Windows.
 
-Further suites: `test_install_windows_fs.py` (case-insensitive layout, names Windows cannot store, excludes while installing, MAX_PATH budget, post-install scripts), `test_imports.py` (import check), `test_boot.py` (start-up
+Further suites: `test_monorepo.py` (uv workspace members and path sources, find-links above the project, non-ASCII project metadata; the slow test builds a three-package workspace, runs it and rebuilds it `--frozen` from another location), `test_install_windows_fs.py` (case-insensitive layout, names Windows cannot store, excludes while installing, MAX_PATH budget, post-install scripts), `test_imports.py` (import check), `test_boot.py` (start-up
 shim), `test_sdist.py` (pure-Python sdists, `pure-python` fallback with real
 msgpack/PyYAML, zig cross-compilation), `test_review_regressions.py`
 (security and correctness fixes from the code review: wheel path traversal,

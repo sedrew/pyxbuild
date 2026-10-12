@@ -31,7 +31,11 @@ def read_wheel_metadata(path: Path) -> tuple[str, str, list[str], str | None]:
                           if n.endswith(".dist-info/METADATA") and n.count("/") == 1), None)
         if meta_name is None:
             raise PyxbuildError(f"{path.name} has no .dist-info/METADATA")
-        msg = email.parser.BytesParser().parsebytes(zf.read(meta_name), headersonly=True)
+        # METADATA is UTF-8 (core metadata spec). Parse it as text, like
+        # importlib.metadata: BytesParser's compat32 policy returns
+        # email.header.Header objects for non-ASCII values ("Summary: Тест").
+        text = zf.read(meta_name).decode("utf-8", errors="replace")
+        msg = email.parser.Parser().parsestr(text, headersonly=True)
     return msg["Name"], msg["Version"], msg.get_all("Requires-Dist") or [], msg["Summary"]
 
 

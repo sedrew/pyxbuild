@@ -21,6 +21,7 @@ from .errors import PyxbuildError, ResolveError
 from .imports import check_imports
 from .install import Excluder, InstallState, apply_excludes, install_wheel
 from .launcher import build_launcher
+from .local import resolve_local
 from .lock import (
     LockInputs,
     compile_lock,
@@ -84,6 +85,7 @@ class TargetBuild:
     project_wheel: BuiltWheel
     lock_path: Path
     wheels: list[Path] = field(default_factory=list)
+    local_wheels: list[Path] = field(default_factory=list)  # workspace / path sources
 
 
 @dataclass
@@ -131,8 +133,15 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
                  "separate package with win_amd64 wheels (e.g. with cibuildwheel)",
         )
 
-    requirements = requirement_lines(wheel.requires_dist, target, env, cfg.extras,
-                                     project=wheel.name)
+    local = resolve_local(
+        cfg.root, wheel.name, wheel.requires_dist, cfg.extras,
+        lambda reqs, extras, owner: requirement_lines(reqs, target, env, extras,
+                                                      project=owner),
+        work / "local")
+    if local.wheels:
+        _log(opts, f"[{target.name}] built local package(s): "
+             + ", ".join(f"{w.name} {w.version}" for w in local.wheels))
+    requirements = local.requirements
     inputs = LockInputs(
         requirements=tuple(requirements), target=target.name,
         python_version=runtime.spec.version, index_url=cfg.index_url,
@@ -162,10 +171,25 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
         lock = read_lock(lock_path)
     assert lock is not None
     selections = select_files(lock, target, env, target.tags(python),
-                              allow_sdist=cfg.sdists_allowed)
+                              allow_sdist=cfg.sdists_allowed, project=wheel.name)
 
-    tb = TargetBuild(target, python, runtime, env, wheel, lock_path)
+    tb = TargetBuild(target, python, runtime, env, wheel, lock_path,
+                     local_wheels=[w.path for w in local.wheels])
+    local_names = set(local.names)
     for sel in selections if download else []:
+        if sel.file is None:  # directory entry of a lock written by another tool
+            if sel.package.name in local_names:
+                continue  # already built from [tool.uv.sources]
+            folder = (lock_base or lock_path.parent) / sel.package.directory
+            _log(opts, f"[{target.name}] building local package {sel.package.name} "
+                 f"from {sel.package.directory}")
+            built = build_wheel(folder, work / "local-lock", quiet=True)
+            if not built.is_pure:
+                raise PyxbuildError(
+                    f"the local package {built.path.name} is platform-specific",
+                    hint="build it for win_amd64 elsewhere and add it through find-links")
+            tb.wheels.append(built.path)
+            continue
         path = fetch(_absolute_url(sel.file.url, lock_base or lock_path.parent),
                      sel.file.sha256, sel.file.name, quiet=opts.quiet)
         if not sel.is_wheel and sel.package.name in cfg.pure_python:
@@ -319,9 +343,12 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     if saved:
         _log(opts, f"[{tb.target.name}] slim: removed {saved / 2**20:.1f} MB of the "
              f"standard library ({', '.join(cfg.slim)})")
-    _log(opts, f"[{tb.target.name}] installing {len(tb.wheels) + 1} wheel(s)")
+    _log(opts, f"[{tb.target.name}] installing "
+         f"{len(tb.wheels) + len(tb.local_wheels) + 1} wheel(s)")
     state = InstallState(runtime_dir, Excluder(cfg.exclude))
     for wheel in sorted(tb.wheels, key=lambda p: p.name.lower()):
+        install_wheel(wheel, runtime_dir, state)
+    for wheel in tb.local_wheels:
         install_wheel(wheel, runtime_dir, state)
     install_wheel(tb.project_wheel.path, runtime_dir, state)
     site_packages = runtime_dir / "Lib" / "site-packages"

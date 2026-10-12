@@ -109,6 +109,7 @@ class LockedPackage:
     wheels: tuple[LockedFile, ...]
     sdist: LockedFile | None
     other_source: str | None
+    directory: str | None = None  # PEP 751 [packages.directory] path (relative to the lock)
 
 
 @dataclass(frozen=True)
@@ -264,26 +265,30 @@ def _annotate(text: str, inputs: LockInputs, target: Target, python_full_version
     return "\n".join(header + out + tool) + "\n"
 
 
+# uv < 0.13 writes find-links files with empty hashes, later versions with sha256
 _LOCAL_FILE_RE = re.compile(
-    r'url = "file://(?P<path>[^"]+)"(?P<mid>[^{}]*?)hashes = \{\s*\}')
+    r'url = "file://(?P<path>[^"]+)"(?P<mid>[^{}]*?)(?P<hashes>hashes = \{[^{}]*\})')
 
 
 def _localize_files(text: str, lock_dir: Path) -> str:
     """Make local find-links files portable and verifiable.
 
-    uv records them as ``url = "file:///abs/path"`` with empty hashes. Files
-    below the lock's directory become relative ``path`` entries (PEP 751)
-    and every local file gets its sha256, so the lock works on any checkout
-    and the files are verified like downloads.
+    uv records them as ``url = "file:///abs/path"`` with empty hashes. They
+    become ``path`` entries relative to the lock's directory (PEP 751), also
+    when they live above it (``../wheels/x.whl`` in a monorepo), and every
+    local file gets its sha256, so the lock works on any checkout with the
+    same layout and the files are verified like downloads. Only a file on
+    another Windows drive keeps its absolute URL.
     """
     def repl(m: re.Match[str]) -> str:
         local = Path(urllib.request.url2pathname(m["path"]))
         digest = hashlib.sha256(local.read_bytes()).hexdigest() if local.is_file() else None
         try:
-            ref = f'path = "{local.resolve().relative_to(lock_dir.resolve()).as_posix()}"'
-        except ValueError:
+            rel = os.path.relpath(local.resolve(), lock_dir.resolve())
+            ref = f'path = "{Path(rel).as_posix()}"'
+        except ValueError:  # different drive
             ref = f'url = "file://{m["path"]}"'
-        hashes = f'hashes = {{ sha256 = "{digest}" }}' if digest else "hashes = {}"
+        hashes = f'hashes = {{ sha256 = "{digest}" }}' if digest else m["hashes"]
         return ref + m["mid"] + hashes
 
     return _LOCAL_FILE_RE.sub(repl, text)
@@ -332,9 +337,12 @@ def read_lock(path: Path) -> Lock:
         other = next((k for k in ("vcs", "directory", "archive") if k in raw), None)
         wheels = tuple(_locked_file(w, name) for w in raw.get("wheels", []))
         sdist = _locked_file(raw["sdist"], name) if "sdist" in raw else None
+        directory = raw["directory"].get("path") if isinstance(raw.get("directory"),
+                                                                 dict) else None
         packages.append(LockedPackage(
             name=canonicalize_name(name), version=raw.get("version"),
             marker=raw.get("marker"), wheels=wheels, sdist=sdist, other_source=other,
+            directory=directory,
         ))
     tool = data.get("tool", {}).get("pyxbuild", {})
     return Lock(path=path, packages=tuple(packages), tool=tool)
@@ -343,13 +351,13 @@ def read_lock(path: Path) -> Lock:
 @dataclass(frozen=True)
 class Selection:
     package: LockedPackage
-    file: LockedFile
+    file: LockedFile | None  # None: build from package.directory
     is_wheel: bool
     tag: Tag | None
 
 
 def select_files(lock: Lock, target: Target, env: dict[str, str], tags: list[Tag],
-                 *, allow_sdist: bool = False) -> list[Selection]:
+                 *, allow_sdist: bool = False, project: str | None = None) -> list[Selection]:
     """Pick, for every package that applies to the target, the best wheel.
 
     Wheels are ranked by the target's tag priority, like an installer running
@@ -360,6 +368,12 @@ def select_files(lock: Lock, target: Target, env: dict[str, str], tags: list[Tag
     problems: list[str] = []
     for pkg in lock.packages:
         if not target.evaluate(pkg.marker, env):
+            continue
+        if pkg.other_source == "directory" and pkg.directory:
+            # a local folder (uv workspace member, path dependency): built from
+            # source like the project; the project itself is built separately
+            if project is None or pkg.name != canonicalize_name(project):
+                selected.append(Selection(pkg, None, False, None))
             continue
         if pkg.other_source:
             problems.append(f"{pkg.name}: {pkg.other_source} sources are not supported")
