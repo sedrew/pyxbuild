@@ -26,6 +26,23 @@
  * The stub does not use the C runtime at all (only KERNEL32 and USER32), which
  * keeps it around 7 KB and free of UCRT/mingw start-up code.
  *
+ * Onefile variant (-DPYX_ONEFILE): the application folder is appended as an
+ * archive before the manifest. The manifest adds
+ *
+ *     onefile         sha256 of the archive (names the cache folder)
+ *     app             application name (folder name)
+ *     archive-offset  archive position in this file
+ *     archive-size    archive length
+ *     extract         "cache" (default) or "temp"
+ *
+ * and "python" is relative to the extracted folder. "cache" extracts once to
+ * %LOCALAPPDATA%\pyx\<app>\<hash12> (or $PYX_ONEFILE_DIR\<app>\<hash12>):
+ * into a temporary folder, then renamed, under a named mutex so concurrent
+ * starts extract only once; later starts reuse it. Older versions are removed
+ * (the newest previous one is kept). "temp" extracts to %TEMP% on every start
+ * and deletes the folder when the application exits. See src/pyxbuild/onefile.py
+ * for the archive format.
+ *
  * Build: python tools/build_stubs.py (uses `zig cc`, see that script).
  */
 
@@ -230,6 +247,457 @@ int memcmp(const void *a, const void *b, size_t n) {
     return 0;
 }
 
+
+#ifdef PYX_ONEFILE
+#include "inflate.h"
+
+#define ARC_MAGIC "PYXARC01"
+#define ARC_HEADER 32
+#define ARC_ENTRY 16
+#define ARC_RECORD 12
+#define ARC_MAX_PATH 4096
+#define STALE_100NS (10ULL * 60 * 10000000) /* 10 minutes */
+
+static pyx_inflater g_inflater;
+
+static void *xalloc(size_t n) {
+    void *p = HeapAlloc(GetProcessHeap(), 0, n ? n : 1);
+    if (!p) fail(L"out of memory", NULL);
+    return p;
+}
+
+static wchar_t *wjoin3(const wchar_t *a, const wchar_t *b, const wchar_t *c) {
+    size_t la = lstrlenW(a), lb = lstrlenW(b), lc = lstrlenW(c);
+    wchar_t *r = (wchar_t *)xalloc((la + lb + lc + 1) * sizeof(wchar_t));
+    memcpy(r, a, la * sizeof(wchar_t));
+    memcpy(r + la, b, lb * sizeof(wchar_t));
+    memcpy(r + la + lb, c, (lc + 1) * sizeof(wchar_t));
+    return r;
+}
+
+static ULONGLONG le64(const unsigned char *p) {
+    return (ULONGLONG)le32(p) | ((ULONGLONG)le32(p + 4) << 32);
+}
+
+static ULONGLONG parse_u64(const wchar_t *s) {
+    ULONGLONG v = 0;
+    if (!s || !*s) fail(L"corrupt onefile manifest", NULL);
+    for (; *s; s++) {
+        if (*s < L'0' || *s > L'9') fail(L"corrupt onefile manifest", NULL);
+        v = v * 10 + (ULONGLONG)(*s - L'0');
+    }
+    return v;
+}
+
+static BOOL exists(const wchar_t *p) {
+    return GetFileAttributesW(p) != INVALID_FILE_ATTRIBUTES;
+}
+
+/* "\\?\" form of an absolute path: no MAX_PATH limit while extracting. */
+static wchar_t *long_form(const wchar_t *p) {
+    if (p[0] == L'\\' && p[1] == L'\\') {
+        if (p[2] == L'?' || p[2] == L'.') return wjoin3(p, L"", L"");
+        return wjoin3(L"\\\\?\\UNC", p + 1, L"");
+    }
+    return wjoin3(L"\\\\?\\", p, L"");
+}
+
+static void mkdirs(wchar_t *path) {
+    wchar_t *p = path + 4; /* after "\\?\" */
+    for (; *p; p++) {
+        if (*p == L'\\') {
+            *p = 0;
+            CreateDirectoryW(path, NULL);
+            *p = L'\\';
+        }
+    }
+    CreateDirectoryW(path, NULL);
+}
+
+static void rmtree(const wchar_t *dir) {
+    WIN32_FIND_DATAW fd;
+    wchar_t *pattern = wjoin3(dir, L"\\*", L"");
+    HANDLE h = FindFirstFileW(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            wchar_t *child;
+            if (!lstrcmpW(fd.cFileName, L".") || !lstrcmpW(fd.cFileName, L".."))
+                continue;
+            child = wjoin3(dir, L"\\", fd.cFileName);
+            if ((fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) &&
+                !(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+                rmtree(child);
+            } else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+                RemoveDirectoryW(child); /* a junction: never follow it */
+            } else {
+                if (fd.dwFileAttributes & FILE_ATTRIBUTE_READONLY)
+                    SetFileAttributesW(child, FILE_ATTRIBUTE_NORMAL);
+                DeleteFileW(child);
+            }
+            HeapFree(GetProcessHeap(), 0, child);
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    HeapFree(GetProcessHeap(), 0, pattern);
+    RemoveDirectoryW(dir);
+}
+
+/* Rename `dir` away first: Windows refuses while a program runs from it or
+ * one of its files is open, so a folder in use is never deleted. */
+static void trash(const wchar_t *dir, const wchar_t *parent) {
+    wchar_t name[64];
+    wchar_t *dest;
+    wsprintfW(name, L"\\.pyx-trash-%lx-%lx", GetCurrentProcessId(), GetTickCount());
+    dest = wjoin3(parent, name, L"");
+    if (MoveFileExW(dir, dest, 0)) rmtree(dest);
+    HeapFree(GetProcessHeap(), 0, dest);
+}
+
+static ULONGLONG ft64(FILETIME ft) {
+    return ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
+}
+
+static ULONGLONG now64(void) {
+    FILETIME ft;
+    GetSystemTimeAsFileTime(&ft);
+    return ft64(ft);
+}
+
+static BOOL starts_with(const wchar_t *s, const wchar_t *prefix) {
+    while (*prefix)
+        if (*s++ != *prefix++) return FALSE;
+    return TRUE;
+}
+
+static BOOL contains(const wchar_t *s, const wchar_t *part) {
+    for (; *s; s++)
+        if (starts_with(s, part)) return TRUE;
+    return FALSE;
+}
+
+/* Remove leftovers in `parent`, never a folder in use (see trash()).
+ *
+ * With `prefix` (temp mode, parent is %TEMP%): only our own folders, i.e.
+ * names starting with `prefix` or ".pyx-trash-", older than ten minutes.
+ * Without (cache mode, parent is the app's own cache folder): abandoned
+ * ".tmp-"/".pyx-trash-" folders older than ten minutes, and every version
+ * folder except `keep` and the newest other one. */
+static void sweep(const wchar_t *parent, const wchar_t *prefix, const wchar_t *keep) {
+    WIN32_FIND_DATAW fd;
+    wchar_t *pattern = wjoin3(parent, L"\\*", L"");
+    wchar_t newest[MAX_PATH];
+    ULONGLONG newest_time = 0, now = now64();
+    HANDLE h;
+    int pass;
+    newest[0] = 0;
+    for (pass = 0; pass < 2; pass++) {
+        h = FindFirstFileW(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) break;
+        do {
+            const wchar_t *n = fd.cFileName;
+            BOOL is_trash = starts_with(n, L".pyx-trash-");
+            BOOL old = now > ft64(fd.ftLastWriteTime) &&
+                       now - ft64(fd.ftLastWriteTime) > STALE_100NS;
+            BOOL remove = FALSE;
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+                !lstrcmpW(n, L".") || !lstrcmpW(n, L".."))
+                continue;
+            if (keep && !lstrcmpW(n, keep)) continue;
+            if (prefix) {
+                if (!is_trash && !starts_with(n, prefix)) continue;
+                remove = pass == 1 && old;
+            } else if (is_trash || contains(n, L".tmp-")) {
+                remove = pass == 1 && old;
+            } else if (pass == 0) {
+                if (ft64(fd.ftLastWriteTime) >= newest_time && lstrlenW(n) < MAX_PATH) {
+                    newest_time = ft64(fd.ftLastWriteTime);
+                    lstrcpyW(newest, n);
+                }
+            } else {
+                remove = lstrcmpW(n, newest) != 0;
+            }
+            if (remove) {
+                wchar_t *path = wjoin3(parent, L"\\", n);
+                trash(path, parent);
+                HeapFree(GetProcessHeap(), 0, path);
+            }
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    HeapFree(GetProcessHeap(), 0, pattern);
+}
+
+typedef struct {
+    const wchar_t *dest; /* "\\?\" form */
+    HANDLE out;
+    ULONGLONG remaining;
+    unsigned char hdr[ARC_RECORD];
+    DWORD hdrlen, pathlen, pathgot, files;
+    char path[ARC_MAX_PATH];
+    wchar_t wpath[ARC_MAX_PATH + 1];
+    wchar_t lastdir[ARC_MAX_PATH + 1];
+} xstate;
+
+static void open_entry(xstate *x) {
+    wchar_t *wpath = x->wpath, *full, *slash;
+    DWORD i, start = 0;
+    int n;
+    /* relative, "/"-separated, no empty, "." or ".." segments, no ':' or '\' */
+    for (i = 0; i <= x->pathlen; i++) {
+        if (i < x->pathlen) {
+            char c = x->path[i];
+            if (c == '\\' || c == ':' || c == 0) fail(L"corrupt onefile archive", NULL);
+            if (c != '/') continue;
+        }
+        if (i == start || (i - start == 1 && x->path[start] == '.') ||
+            (i - start == 2 && x->path[start] == '.' && x->path[start + 1] == '.'))
+            fail(L"corrupt onefile archive", NULL);
+        start = i + 1;
+    }
+    n = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, x->path, (int)x->pathlen,
+                            wpath, ARC_MAX_PATH);
+    if (n <= 0) fail(L"corrupt onefile archive", NULL);
+    wpath[n] = 0;
+    for (i = 0; i < (DWORD)n; i++)
+        if (wpath[i] == L'/') wpath[i] = L'\\';
+    full = wjoin3(x->dest, L"\\", wpath);
+    slash = full + lstrlenW(full);
+    while (slash > full && *slash != L'\\') slash--;
+    *slash = 0;
+    if (lstrcmpW(full, x->lastdir) != 0) {
+        mkdirs(full);
+        if (lstrlenW(full) <= ARC_MAX_PATH) lstrcpyW(x->lastdir, full);
+    }
+    *slash = L'\\';
+    x->out = CreateFileW(full, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                         FILE_ATTRIBUTE_NORMAL, NULL);
+    if (x->out == INVALID_HANDLE_VALUE) fail(L"cannot write", full);
+    HeapFree(GetProcessHeap(), 0, full);
+}
+
+static void close_entry(xstate *x) {
+    CloseHandle(x->out);
+    x->out = NULL;
+    x->files++;
+    x->hdrlen = x->pathgot = 0;
+}
+
+static void feed(xstate *x, const unsigned char *p, DWORD len) {
+    while (len) {
+        DWORD take;
+        if (x->out == NULL) {
+            if (x->hdrlen < ARC_RECORD) {
+                take = ARC_RECORD - x->hdrlen;
+                if (take > len) take = len;
+                memcpy(x->hdr + x->hdrlen, p, take);
+                x->hdrlen += take;
+                p += take;
+                len -= take;
+                if (x->hdrlen < ARC_RECORD) return;
+                x->pathlen = le32(x->hdr);
+                x->remaining = le64(x->hdr + 4);
+                x->pathgot = 0;
+                if (x->pathlen == 0 || x->pathlen >= ARC_MAX_PATH)
+                    fail(L"corrupt onefile archive", NULL);
+            }
+            take = x->pathlen - x->pathgot;
+            if (take > len) take = len;
+            memcpy(x->path + x->pathgot, p, take);
+            x->pathgot += take;
+            p += take;
+            len -= take;
+            if (x->pathgot < x->pathlen) return;
+            open_entry(x);
+            if (x->remaining == 0) close_entry(x);
+        } else {
+            DWORD written;
+            take = x->remaining < len ? (DWORD)x->remaining : len;
+            if (!WriteFile(x->out, p, take, &written, NULL) || written != take)
+                fail(L"cannot write the extracted application (disk full?)", x->dest);
+            x->remaining -= take;
+            p += take;
+            len -= take;
+            if (x->remaining == 0) close_entry(x);
+        }
+    }
+}
+
+static void extract(HANDLE f, ULONGLONG off, ULONGLONG size, const wchar_t *dest) {
+    unsigned char hdr[ARC_HEADER];
+    unsigned char *table, *cbuf, *ubuf;
+    DWORD chunks, files, i, maxc = 0, maxu = 0;
+    xstate *x;
+    if (size < ARC_HEADER || !read_at(f, (LONGLONG)off, hdr, ARC_HEADER) ||
+        memcmp(hdr, ARC_MAGIC, 8) != 0 || le32(hdr + 8) != 1)
+        fail(L"corrupt onefile archive", NULL);
+    chunks = le32(hdr + 12);
+    files = le32(hdr + 24);
+    if ((ULONGLONG)chunks * ARC_ENTRY > size - ARC_HEADER)
+        fail(L"corrupt onefile archive", NULL);
+    table = (unsigned char *)xalloc((size_t)chunks * ARC_ENTRY);
+    if (chunks && !read_at(f, (LONGLONG)(off + ARC_HEADER), table, chunks * ARC_ENTRY))
+        fail(L"cannot read the onefile archive", NULL);
+    for (i = 0; i < chunks; i++) {
+        const unsigned char *e = table + (size_t)i * ARC_ENTRY;
+        DWORD c = le32(e + 8), u = le32(e + 12);
+        if (le64(e) > size || c > size - le64(e) || c > 64u << 20 || u > 64u << 20)
+            fail(L"corrupt onefile archive", NULL);
+        if (c > maxc) maxc = c;
+        if (u > maxu) maxu = u;
+    }
+    cbuf = (unsigned char *)xalloc(maxc);
+    ubuf = (unsigned char *)xalloc(maxu);
+    x = (xstate *)xalloc(sizeof(xstate));
+    memset(x, 0, sizeof(xstate));
+    x->dest = dest;
+    mkdirs((wchar_t *)dest);
+    for (i = 0; i < chunks; i++) {
+        const unsigned char *e = table + (size_t)i * ARC_ENTRY;
+        DWORD c = le32(e + 8), u = le32(e + 12);
+        if (!read_at(f, (LONGLONG)(off + le64(e)), cbuf, c))
+            fail(L"cannot read the onefile archive", NULL);
+        if (c == u) {
+            feed(x, cbuf, u); /* stored */
+        } else if (pyx_inflate(&g_inflater, cbuf, c, ubuf, u) == (long long)u) {
+            feed(x, ubuf, u);
+        } else {
+            fail(L"corrupt onefile archive (bad chunk)", NULL);
+        }
+    }
+    if (x->out != NULL || x->hdrlen != 0 || x->files != files)
+        fail(L"corrupt onefile archive (incomplete)", NULL);
+    HeapFree(GetProcessHeap(), 0, x);
+    HeapFree(GetProcessHeap(), 0, ubuf);
+    HeapFree(GetProcessHeap(), 0, cbuf);
+    HeapFree(GetProcessHeap(), 0, table);
+}
+
+static void write_marker(const wchar_t *dir, const wchar_t *hash) {
+    wchar_t *path = wjoin3(dir, L"\\.pyx-complete", L"");
+    char text[128];
+    DWORD written;
+    int n = WideCharToMultiByte(CP_UTF8, 0, hash, -1, text, sizeof(text) - 2, NULL, NULL);
+    HANDLE h = CreateFileW(path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) fail(L"cannot write", path);
+    if (n > 0) {
+        text[n - 1] = '\n';
+        WriteFile(h, text, (DWORD)n, &written, NULL);
+    }
+    CloseHandle(h);
+    HeapFree(GetProcessHeap(), 0, path);
+}
+
+static wchar_t *env(const wchar_t *name) {
+    DWORD n = GetEnvironmentVariableW(name, NULL, 0);
+    wchar_t *v;
+    if (n == 0) return NULL;
+    v = (wchar_t *)xalloc(n * sizeof(wchar_t));
+    if (GetEnvironmentVariableW(name, v, n) == 0 || !*v) return NULL;
+    return v;
+}
+
+static wchar_t *full_path(const wchar_t *p) {
+    DWORD n = GetFullPathNameW(p, 0, NULL, NULL);
+    wchar_t *r;
+    if (n == 0) fail(L"invalid folder", p);
+    r = (wchar_t *)xalloc((n + 1) * sizeof(wchar_t));
+    GetFullPathNameW(p, n + 1, r, NULL);
+    n = lstrlenW(r);
+    while (n > 3 && (r[n - 1] == L'\\' || r[n - 1] == L'/')) r[--n] = 0;
+    return r;
+}
+
+/* Extract (or find) the application; returns its folder (plain form) and
+ * sets *temp_dir to the "\\?\" folder to delete after the run, if any. */
+static wchar_t *onefile_root(const wchar_t *exe, const char *payload, wchar_t **temp_dir) {
+    wchar_t *hash = manifest_get(payload, "onefile");
+    wchar_t *app = manifest_get(payload, "app");
+    wchar_t *mode = manifest_get(payload, "extract");
+    ULONGLONG off = parse_u64(manifest_get(payload, "archive-offset"));
+    ULONGLONG size = parse_u64(manifest_get(payload, "archive-size"));
+    wchar_t short_hash[13];
+    wchar_t *base, *appdir, *root, *xroot;
+    HANDLE f;
+    int i;
+    *temp_dir = NULL;
+    if (!hash || lstrlenW(hash) < 12 || !app || !*app)
+        fail(L"corrupt onefile manifest", exe);
+    for (i = 0; i < 12; i++) short_hash[i] = hash[i];
+    short_hash[12] = 0;
+    f = CreateFileW(exe, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
+                    OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) fail(L"cannot open itself", exe);
+
+    if (mode && !lstrcmpW(mode, L"temp")) {
+        wchar_t tmp[MAX_PATH + 1], name[64];
+        DWORD n = GetTempPathW(MAX_PATH + 1, tmp);
+        wchar_t *prefix;
+        if (n == 0 || n > MAX_PATH) fail(L"no temporary folder", NULL);
+        if (n > 3 && tmp[n - 1] == L'\\') tmp[n - 1] = 0;
+        prefix = wjoin3(L"pyx-", app, L"-");
+        sweep(tmp, prefix, NULL); /* folders left by killed runs */
+        wsprintfW(name, L"%lx-%lx", GetCurrentProcessId(), GetTickCount());
+        root = wjoin3(tmp, L"\\", prefix);
+        root = wjoin3(root, name, L"");
+        xroot = long_form(root);
+        extract(f, off, size, xroot);
+        CloseHandle(f);
+        *temp_dir = xroot;
+        return root;
+    }
+
+    base = env(L"PYX_ONEFILE_DIR");
+    if (base) {
+        base = full_path(base);
+    } else {
+        wchar_t *local = env(L"LOCALAPPDATA");
+        if (!local) {
+            wchar_t tmp[MAX_PATH + 1];
+            if (GetTempPathW(MAX_PATH + 1, tmp) == 0) fail(L"no folder to extract to", NULL);
+            local = full_path(tmp);
+        }
+        base = wjoin3(local, L"\\pyx", L"");
+    }
+    appdir = wjoin3(base, L"\\", app);
+    root = wjoin3(appdir, L"\\", short_hash);
+    xroot = long_form(root);
+    {
+        wchar_t *xappdir = long_form(appdir);
+        wchar_t *marker = wjoin3(xroot, L"\\.pyx-complete", L"");
+        wchar_t *reset = env(L"PYX_ONEFILE_RESET");
+        if (reset && lstrcmpW(reset, L"0") != 0 && exists(xroot)) trash(xroot, xappdir);
+        if (!exists(marker)) {
+            wchar_t mutex_name[64], suffix[64];
+            HANDLE mutex;
+            wsprintfW(mutex_name, L"Local\\pyx-onefile-%s", short_hash);
+            mkdirs(xappdir);
+            mutex = CreateMutexW(NULL, FALSE, mutex_name);
+            if (mutex) WaitForSingleObject(mutex, INFINITE);
+            if (!exists(marker)) { /* another start may have finished meanwhile */
+                wchar_t *xtmp;
+                if (exists(xroot)) trash(xroot, xappdir); /* incomplete */
+                wsprintfW(suffix, L".tmp-%lx-%lx", GetCurrentProcessId(), GetTickCount());
+                xtmp = wjoin3(xroot, suffix, L"");
+                extract(f, off, size, xtmp);
+                write_marker(xtmp, hash);
+                if (!MoveFileExW(xtmp, xroot, 0)) {
+                    if (!exists(marker)) fail(L"cannot install the extracted application", root);
+                    rmtree(xtmp);
+                }
+                sweep(xappdir, NULL, short_hash); /* older versions */
+            }
+            if (mutex) {
+                ReleaseMutex(mutex);
+                CloseHandle(mutex);
+            }
+        }
+    }
+    CloseHandle(f);
+    return root;
+}
+#endif /* PYX_ONEFILE */
+
 static int run(void);
 
 void __stdcall pyx_entry(void) { ExitProcess((UINT)run()); }
@@ -248,15 +716,26 @@ static int run(void) {
     HANDLE job;
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION jl;
     DWORD exit_code = 1;
+#ifdef PYX_ONEFILE
+    wchar_t *temp_dir = NULL;
+#endif
 
     if (!python || !code) fail(L"manifest lacks 'python' or 'code'", exe);
     if (!flags) flags = L"";
 
+#ifdef PYX_ONEFILE
+    /* the extracted application folder, with a trailing backslash */
+    dir = onefile_root(exe, payload, &temp_dir);
+    dir = wjoin3(dir, L"\\", L"");
+    dlen = (size_t)lstrlenW(dir);
+    (void)slash;
+#else
     /* directory of the launcher, including the trailing backslash */
     slash = exe + lstrlenW(exe);
     while (slash > exe && slash[-1] != L'\\' && slash[-1] != L'/') slash--;
     dlen = (size_t)(slash - exe);
     dir = exe;
+#endif
 
     ilen = dlen + lstrlenW(python) + 1;
     interp = (wchar_t *)HeapAlloc(GetProcessHeap(), 0, ilen * sizeof(wchar_t));
@@ -335,6 +814,17 @@ static int run(void) {
     WaitForSingleObject(pi.hProcess, INFINITE);
     if (!GetExitCodeProcess(pi.hProcess, &exit_code)) exit_code = 1;
     CloseHandle(pi.hProcess);
+#ifdef PYX_ONEFILE
+    if (temp_dir) {
+        /* "temp" mode: the files are released once the process has exited;
+         * a folder still in use (a detached child) is swept on a later start */
+        int tries;
+        for (tries = 0; tries < 5 && exists(temp_dir); tries++) {
+            rmtree(temp_dir);
+            if (exists(temp_dir)) Sleep(200);
+        }
+    }
+#endif
     ExitProcess(exit_code);
     return (int)exit_code;
 }

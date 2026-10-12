@@ -409,9 +409,8 @@ def build(cfg: ProjectConfig, opts: BuildOptions | None = None) -> list[BuildRes
 
 def _build(cfg: ProjectConfig, opts: BuildOptions) -> list[BuildResult]:
     mode = opts.mode or cfg.mode
-    if mode != "folder":
-        raise PyxbuildError(f"mode {mode!r} is not implemented yet",
-                            hint="use mode = \"folder\" (the default)")
+    if mode not in ("folder", "onefile"):
+        raise PyxbuildError(f"unknown mode {mode!r}", hint='use "folder" or "onefile"')
     dist = (cfg.root / (opts.out_dir or cfg.dist_dir)).resolve()
     dist.mkdir(parents=True, exist_ok=True)
     make_zip = cfg.zip if opts.zip is None else opts.zip
@@ -422,7 +421,8 @@ def _build(cfg: ProjectConfig, opts: BuildOptions) -> list[BuildResult]:
             work = Path(tmp)
             tb = prepare(cfg, target, opts, work)
             staging = work / "app"
-            launchers, report = assemble(cfg, tb, staging, opts)
+            launchers, report = assemble(cfg, tb, staging, opts,
+                                         launchers=mode == "folder")
             shown = [f for f in report.findings if f.level != doctor.INFO]
             if shown:
                 _log(opts, f"[{target.name}] bundle check:\n"
@@ -435,6 +435,14 @@ def _build(cfg: ProjectConfig, opts: BuildOptions) -> list[BuildResult]:
                     f"bundle check found {len(report.errors)} error(s)",
                     hint="fix them, or build without --strict",
                 )
+            if mode == "onefile":
+                exes = _write_onefile(cfg, tb, staging, work, dist, opts)
+                if make_zip:
+                    _log(opts, f"[{target.name}] zip skipped: a onefile build is one file")
+                _log(opts, f"[{target.name}] built " + ", ".join(str(e) for e in exes))
+                results.append(BuildResult(target.name, tb.runtime.spec.version, dist, exes,
+                                           None, report))
+                continue
             app_dir = dist / f"{cfg.normalized_name}-{target.name}"
             if app_dir.exists():
                 shutil.rmtree(app_dir)
@@ -448,6 +456,36 @@ def _build(cfg: ProjectConfig, opts: BuildOptions) -> list[BuildResult]:
         results.append(BuildResult(target.name, tb.runtime.spec.version, app_dir, launchers,
                                    zip_path, report))
     return results
+
+
+def _write_onefile(cfg: ProjectConfig, tb: TargetBuild, staging: Path, work: Path,
+                   dist: Path, opts: BuildOptions) -> list[Path]:
+    """Pack the assembled folder into one executable per entry point."""
+    from .launcher import write_onefile
+    from .onefile import write_archive
+
+    _log(opts, f"[{tb.target.name}] packing the application into one file "
+         f"(extract: {cfg.onefile_extract})")
+    archive = write_archive(staging, work / "app.pyxarc")
+    if len(cfg.entry_points) > 1:
+        _log(opts, f"[{tb.target.name}] note: each of the {len(cfg.entry_points)} "
+             "executables carries the whole application; they share one extracted copy")
+    exes = []
+    for entry in cfg.entry_points:
+        res = launcher_resources(
+            script=entry.name, project_name=tb.project_wheel.name,
+            version=tb.project_wheel.version, description=tb.project_wheel.summary,
+            version_info_cfg=cfg.version_info, icon=cfg.icon,
+        )
+        exe = dist / f"{entry.name}{tb.target.exe_suffix}"
+        partial = exe.with_name(exe.name + ".partial")
+        write_onefile(partial, entry, tb.target.name, archive, app=cfg.normalized_name,
+                      extract=cfg.onefile_extract, utf8_mode=cfg.utf8_mode, resources=res)
+        os.replace(partial, exe)
+        exes.append(exe)
+    _log(opts, f"[{tb.target.name}] {archive.files} files, "
+         f"{archive.stream_size / 2**20:.1f} MB -> {archive.size / 2**20:.1f} MB")
+    return exes
 
 
 def lock_only(cfg: ProjectConfig, opts: BuildOptions) -> list[Path]:

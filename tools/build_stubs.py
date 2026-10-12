@@ -46,6 +46,8 @@ COMPILE_FLAGS = [
     "-mno-stack-arg-probe",
 ]
 LINK_FLAGS = ["-s", "-nostdlib", "-Wl,--entry,pyx_entry"]
+# folder-mode launchers, and onefile launchers that carry the app as an archive
+VARIANTS = ("console", "gui", "onefile-console", "onefile-gui")
 LIBS = ["-lkernel32", "-luser32"]
 
 
@@ -92,13 +94,15 @@ def build(out_dir: Path) -> dict[str, str]:
                  f"pip install ziglang=={ZIG_VERSION}")
     hashes = {}
     for platform, triple in TARGETS.items():
-        for kind in ("console", "gui"):
+        for kind in VARIANTS:
             out = out_dir / f"launcher-{kind}-{platform}.exe"
             obj = out_dir / f"launcher-{kind}-{platform}.o"
             flags = [f.format(root=ROOT) for f in COMPILE_FLAGS]
-            if kind == "gui":
+            if kind.endswith("gui"):
                 flags.append("-DPYX_GUI")
-            subsystem = "windows" if kind == "gui" else "console"
+            if kind.startswith("onefile"):
+                flags.append("-DPYX_ONEFILE")
+            subsystem = "windows" if kind.endswith("gui") else "console"
             subprocess.run([*zig, "cc", "-target", triple, *flags, "-c", "-o", str(obj),
                             os.path.relpath(SOURCE, ROOT)], check=True, cwd=ROOT)
             subprocess.run([*zig, "cc", "-target", triple, *LINK_FLAGS,

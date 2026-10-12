@@ -102,6 +102,34 @@ When the file is Authenticode-signed, the certificate table follows the
 trailer; the launcher finds the original end of file from the PE security
 directory and skips the ≤7 zero bytes of alignment padding.
 
+## Onefile (format 1)
+
+```
+[onefile stub (+ resources)][archive][manifest][trailer]
+```
+
+The archive is described in `src/pyxbuild/onefile.py`: a header, a chunk
+table, and the stream of `(path, size, data)` records cut into 1 MiB chunks
+that are raw DEFLATE (or stored when that does not help), compressed in
+parallel and deterministically. The launcher needs two chunk-sized buffers;
+`stub/inflate.h` is its DEFLATE decoder (tested against zlib, also on
+corrupted input). Extra manifest keys: `onefile` (archive sha256),
+`app`, `archive-offset`, `archive-size`, `extract` (`cache`/`temp`); `python`
+is then relative to the extracted folder.
+
+Cache mode: `<base>\<app>\<first 12 hex of the hash>\` with base
+`%LOCALAPPDATA%\pyx` or `$PYX_ONEFILE_DIR`. A start that finds
+`.pyx-complete` runs at once. Otherwise, under the mutex
+`Local\pyx-onefile-<hash12>`, it extracts to `<hash12>.tmp-<pid>-<tick>`
+(`\\?\` paths, no MAX_PATH limit while extracting), writes the marker and
+renames the folder into place; then it removes the other versions except the
+newest one, and abandoned `.tmp-`/trash folders older than ten minutes.
+Folders are renamed to `.pyx-trash-*` before deletion, which Windows refuses
+while a program runs from them.
+
+Temp mode: `%TEMP%\pyx-<app>-<pid>-<tick>\`, deleted after the child exits;
+our folders older than ten minutes are swept at start.
+
 ## Environment variables
 
 | variable | effect |
@@ -110,4 +138,6 @@ directory and skips the ≤7 zero bytes of alignment padding.
 | `PYXBUILD_OFFLINE` | never download; fail if something is not cached |
 | `PYXBUILD_RUNTIME_MIRROR` | base URL instead of GitHub releases |
 | `PYXBUILD_UV` | uv executable to use |
+| `PYX_ONEFILE_DIR` | (end user) where onefile apps are extracted; default `%LOCALAPPDATA%\pyx` |
+| `PYX_ONEFILE_RESET` | (end user) `1`: extract a onefile app again |
 | `SOURCE_DATE_EPOCH` | timestamps written to files and the zip (default 1980-01-01) |

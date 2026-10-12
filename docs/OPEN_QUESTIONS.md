@@ -87,7 +87,8 @@ later.
 
 ## Not done (out of the MVP as approved)
 
-- onefile mode, win_arm64/macOS/Linux targets, installers (MSI/NSIS);
+- win_arm64/macOS/Linux targets, installers (MSI/NSIS); onefile has no
+  progress window during the first extraction;
 - `doctor` without building (it resolves and installs into a temp folder);
 - DLLs loaded with `LoadLibrary` at run time (CUDA, Qt plugins) are invisible
   to the static PE import check;

@@ -27,8 +27,8 @@ TRAILER = struct.Struct("<II8s")
 DEFAULT_FLAGS = "-I"
 
 
-def stub_bytes(target: str, gui: bool) -> bytes:
-    kind = "gui" if gui else "console"
+def stub_bytes(target: str, gui: bool, onefile: bool = False) -> bytes:
+    kind = ("onefile-" if onefile else "") + ("gui" if gui else "console")
     name = f"launcher-{kind}-{target}.exe"
     ref = resources.files("pyxbuild").joinpath("_stubs", name)
     try:
@@ -117,3 +117,39 @@ def build_launcher(entry: EntryPoint, target: str, *, python_rel: str,
 
         stub = add_resources(stub, resources)
     return stub + encode_manifest(fields)
+
+
+def write_onefile(dest, entry: EntryPoint, target: str, archive, *, app: str,
+                  extract: str = "cache", utf8_mode: bool = False,
+                  resources: dict[int, dict[int, bytes]] | None = None) -> None:
+    """Write a onefile launcher: stub (+ resources) + archive + manifest.
+
+    ``archive`` is an :class:`pyxbuild.onefile.ArchiveInfo`. The launcher
+    extracts it (once per archive hash, or to %TEMP% with ``extract="temp"``)
+    and runs ``runtime\\python.exe`` from there, through ``_pyxbuild_boot``.
+    """
+    import shutil
+
+    if extract not in ("cache", "temp"):
+        raise PyxbuildError(f"unknown onefile extraction mode {extract!r}")
+    stub = stub_bytes(target, entry.gui, onefile=True)
+    if resources:
+        from .resources import add_resources
+
+        stub = add_resources(stub, resources)
+    fields = {
+        "python": "runtime" + ("\\pythonw.exe" if entry.gui else "\\python.exe"),
+        "flags": DEFAULT_FLAGS + (" -X utf8" if utf8_mode else ""),
+        "code": boot_code(entry),
+        "entry-point": f"{entry.module}:{entry.attr}",
+        "onefile": archive.sha256,
+        "app": app,
+        "archive-offset": str(len(stub)),
+        "archive-size": str(archive.size),
+        "extract": extract,
+    }
+    with open(dest, "wb") as out:
+        out.write(stub)
+        with open(archive.path, "rb") as src:
+            shutil.copyfileobj(src, out, 1 << 20)
+        out.write(encode_manifest(fields))

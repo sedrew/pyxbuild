@@ -34,7 +34,7 @@ _KNOWN_KEYS = {
     "dist-dir", "index-url", "extra-index-urls", "find-links", "allow-sdist",
     "cross-compile", "pure-python", "extras", "scripts", "slim", "bytecode",
     "env", "clean-env", "app-id", "truststore", "gui-log", "dpi-aware", "keep-dev-files",
-    "version-info", "utf8-mode",
+    "version-info", "utf8-mode", "onefile-extract",
 }
 
 
@@ -69,6 +69,7 @@ class ProjectConfig:
     python: str | None = None
     runtime: str = "python-build-standalone"
     mode: str = "folder"
+    onefile_extract: str = "cache"  # "cache": once per version; "temp": every start
     icon: Path | None = None
     lock: Path | None = None
     exclude: list[str] = field(default_factory=list)
@@ -84,7 +85,7 @@ class ProjectConfig:
                                                      "turtledemo", "lib2to3"])
     """Standard-library parts to drop (see builder.SLIM_PRESETS)."""
     env: dict[str, str] = field(default_factory=dict)
-    """Environment set at start-up; {app_dir}, {data_dir}, {localappdata} expand."""
+    """Environment set at start-up; {app_dir}, {exe_dir}, {data_dir}, {localappdata} expand."""
     clean_env: list[str] = field(default_factory=lambda: list(DEFAULT_CLEAN_ENV))
     app_id: str | None = None
     truststore: bool = False
@@ -260,6 +261,10 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
         cfg.mode = _str(tool["mode"], "mode")
         if cfg.mode not in MODES:
             raise ConfigError(f"mode must be one of {', '.join(MODES)}")
+    if "onefile-extract" in tool:
+        cfg.onefile_extract = _str(tool["onefile-extract"], "onefile-extract")
+        if cfg.onefile_extract not in ("cache", "temp"):
+            raise ConfigError('onefile-extract must be "cache" or "temp"')
     if "icon" in tool:
         cfg.icon = root / _str(tool["icon"], "icon")
     if "lock" in tool:

@@ -52,7 +52,7 @@ myapp = "myapp.main:run"
 [tool.pyxbuild]            # everything is optional
 targets = ["win_amd64"]
 python = "3.12"            # default: newest supported allowed by requires-python
-mode = "folder"            # "onefile" is planned
+mode = "folder"            # or "onefile": a single .exe (see below)
 lock = "pylock.toml"       # default: pylock.win_amd64.toml
 exclude = ["tests/", "*.pyi"]
 zip = true
@@ -84,6 +84,29 @@ pyxbuild sign dist/myapp-win_amd64 --cert cert.pfx --password-env PFX_PASSWORD
 Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
 `--offline` builds from the download cache only.
 
+### One file
+
+`mode = "onefile"` (or `pyxbuild build --mode onefile`) produces
+`dist/<script>.exe` alone: the application folder travels inside the
+executable as a compressed archive. Windows can only load DLLs and `.pyd`
+files from disk, so the launcher extracts it:
+
+* `onefile-extract = "cache"` (default): once per version, into
+  `%LOCALAPPDATA%\pyx\<app>\<hash>\`; later starts reuse it and are as fast
+  as the folder mode. Extraction goes to a temporary folder that is renamed
+  when complete, under a named mutex, so concurrent or interrupted first
+  starts are safe; the previous version is kept, older ones are removed.
+  `PYX_ONEFILE_DIR` changes the location, `PYX_ONEFILE_RESET=1` re-extracts.
+* `onefile-extract = "temp"`: like PyInstaller, into `%TEMP%` on every start,
+  deleted when the application exits (folders of killed runs are swept on a
+  later start).
+
+Combine it with `bytecode = true` for a fast first start. `{app_dir}` in
+`[tool.pyxbuild.env]` is the extracted folder (bundled data), `{exe_dir}` the
+folder of the `.exe`. `pyxbuild sign dist/myapp.exe` signs it, archive
+included. The launcher stays free of the C runtime (17 KB, its own DEFLATE
+decoder).
+
 ### Monorepos
 
 Dependencies on sibling packages through uv's `[tool.uv.sources]` work:
@@ -112,7 +135,7 @@ same layout. Only a folder on another Windows drive is kept as an absolute
 * Some wheels need Visual C++ runtime DLLs that Windows does not ship
   (torch, ...). `pyxbuild doctor` lists them; add `msvc-runtime` to the
   dependencies to bundle them.
-* Only the folder mode and the `win_amd64` target exist so far.
+* Only the `win_amd64` target exists so far.
 
 Documentation: [design](docs/DESIGN.md) · [testing](docs/TESTING.md) ·
 [compatibility matrix](docs/COMPATIBILITY.md) (38 packages × Python 3.11–3.14) ·

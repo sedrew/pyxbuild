@@ -11,6 +11,8 @@ Variants (size and start-up)
     default        pyxbuild defaults
     slim-tk        slim = default + ["tk", "pydoc"]
     bytecode       bytecode = true (precompiled .pyc)
+    onefile        mode = "onefile" + bytecode: one .exe, extracted once to a cache
+    onefile-temp   the same with onefile-extract = "temp" (extracted on every start)
 Start-up is measured by running the app's entry point with ``--exit=0``-like
 arguments N times; the first run after a build is reported separately
 because Python writes __pycache__ then. On Linux/macOS the app runs under
@@ -40,6 +42,8 @@ VARIANTS = {
     "default": "",
     "slim-tk": 'slim = ["tests", "idle", "ensurepip", "turtledemo", "lib2to3", "tk", "pydoc"]\n',
     "bytecode": "bytecode = true\n",
+    "onefile": 'mode = "onefile"\nbytecode = true\n',
+    "onefile-temp": 'mode = "onefile"\nbytecode = true\nonefile-extract = "temp"\n',
 }
 
 
@@ -62,17 +66,23 @@ def _build(proj: Path, python: str, cache: Path, *extra: str) -> float:
 
 
 def _size(app: Path) -> dict:
+    if app.is_file():  # onefile
+        return {"bytes": app.stat().st_size, "files": 1, "zip_bytes": None}
     files = [p for p in app.rglob("*") if p.is_file()]
     zips = list(app.parent.glob("*.zip"))
     return {"bytes": sum(p.stat().st_size for p in files), "files": len(files),
             "zip_bytes": zips[0].stat().st_size if zips else None}
 
 
-def _run(exe: Path, args: list[str]) -> float:
+def _win_path(path: Path) -> str:
+    return str(path) if sys.platform == "win32" else "Z:" + str(path).replace("/", "\\")
+
+
+def _run(exe: Path, args: list[str], env: dict[str, str] | None = None) -> float:
     cmd = [str(exe), *args]
     if sys.platform != "win32":
         cmd.insert(0, os.environ.get("PYXBUILD_WINE", "wine"))
-    env = {**os.environ, "WINEDEBUG": "-all"}
+    env = {**os.environ, "WINEDEBUG": "-all", **(env or {})}
     start = time.perf_counter()
     proc = subprocess.run(cmd, capture_output=True, env=env)
     elapsed = time.perf_counter() - start
@@ -81,9 +91,9 @@ def _run(exe: Path, args: list[str]) -> float:
     return elapsed
 
 
-def _startup(exe: Path, args: list[str], runs: int) -> dict:
-    first = _run(exe, args)
-    times = [_run(exe, args) for _ in range(runs)]
+def _startup(exe: Path, args: list[str], runs: int, env: dict[str, str] | None = None) -> dict:
+    first = _run(exe, args, env)
+    times = [_run(exe, args, env) for _ in range(runs)]
     return {"first_s": round(first, 3), "median_s": round(statistics.median(times), 3),
             "min_s": round(min(times), 3)}
 
@@ -107,9 +117,14 @@ def bench_pyxbuild(project: str, python: str, runs: int, work: Path, cache: Path
         if extra:
             _tool_table(vproj, extra)
         seconds = _build(vproj, python, cache)
-        (app,) = [d for d in (vproj / "dist").iterdir() if d.is_dir()]
+        if name.startswith("onefile"):
+            app = vproj / "dist" / f"{entry}.exe"
+            exe, env = app, {"PYX_ONEFILE_DIR": _win_path(work / name / "extracted")}
+        else:
+            (app,) = [d for d in (vproj / "dist").iterdir() if d.is_dir()]
+            exe, env = app / f"{entry}.exe", None
         info = {"build_s": round(seconds, 2), **_size(app)}
-        info.update(_startup(app / f"{entry}.exe", args, runs))
+        info.update(_startup(exe, args, runs, env))
         out["variants"][name] = info
         if name == "default":
             # floor: the bundled interpreter doing nothing (process creation,
@@ -134,6 +149,16 @@ def bench_pyinstaller(project: str, runs: int, work: Path) -> dict:
     mod, func = module.split(":")
     script = work / "pyi_entry.py"
     script.write_text(f"import sys\nfrom {mod} import {func}\nsys.exit({func}())\n")
+    variants = {}
+    start = time.perf_counter()
+    subprocess.run([str(py), "-m", "PyInstaller", "--noconfirm", "--onefile", "--name", entry,
+                    "--distpath", str(work / "pyi-onefile"), "--workpath",
+                    str(work / "pyi-build1"), "--specpath", str(work),
+                    "--collect-all", "certifi", str(script)],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    onefile = work / "pyi-onefile" / f"{entry}.exe"
+    variants["onefile"] = {"build_s": round(time.perf_counter() - start, 2), **_size(onefile),
+                           **_startup(onefile, args, runs)}
     start = time.perf_counter()
     subprocess.run([str(py), "-m", "PyInstaller", "--noconfirm", "--onedir", "--name", entry,
                     "--distpath", str(work / "pyi-dist"), "--workpath", str(work / "pyi-build"),
@@ -148,7 +173,8 @@ def bench_pyinstaller(project: str, runs: int, work: Path) -> dict:
                 zf.write(p, p.relative_to(app.parent).as_posix())
     info = {"build_s": round(seconds, 2), **_size(app), "zip_bytes": zpath.stat().st_size}
     info.update(_startup(app / f"{entry}.exe", args, runs))
-    return {"tool": "pyinstaller", "project": project, "variants": {"onedir": info}}
+    variants["onedir"] = info
+    return {"tool": "pyinstaller", "project": project, "variants": variants}
 
 
 def main() -> int:

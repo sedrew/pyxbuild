@@ -6,7 +6,7 @@ calling the entry point:
 
 * removes environment variables that would point the app at another
   installation (``clean-env``, e.g. TCL_LIBRARY, QT_PLUGIN_PATH);
-* sets variables from ``[tool.pyxbuild.env]`` (``{app_dir}``, ``{data_dir}``
+* sets variables from ``[tool.pyxbuild.env]`` (``{app_dir}``, ``{exe_dir}``, ``{data_dir}``
   and ``{localappdata}`` are expanded);
 * for GUI scripts: gives ``print``/``logging`` a log file instead of
   ``sys.stdout = None``, shows unhandled exceptions in a message box instead
@@ -104,10 +104,14 @@ def main(script):
     boot = cfg.get("boot", {})
     # the launcher passes its own path first; it becomes sys.argv[0]
     sys.argv[0:2] = sys.argv[1:2]
-    app_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
+    # the bundle's root (the folder holding runtime\): the launcher's folder,
+    # or the extracted copy of a onefile executable; exe_dir is where the
+    # .exe the user started lives
+    app_dir = os.path.dirname(os.path.abspath(sys.prefix))
+    exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
     app_name = cfg.get("project", {}).get("name", script)
     localappdata = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    names = {"app_dir": app_dir, "localappdata": localappdata,
+    names = {"app_dir": app_dir, "exe_dir": exe_dir, "localappdata": localappdata,
              "data_dir": os.path.join(localappdata, app_name)}
 
     for var in boot.get("clean-env", []):
