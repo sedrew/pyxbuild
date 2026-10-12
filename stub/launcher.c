@@ -448,9 +448,9 @@ static const wchar_t *g_progress_title;
 
 static struct {
     int dpi, permille, own_border;
-    HFONT title_font, text_font;
+    HFONT title_font, text_font, letter_font;
     HICON icon;
-    COLORREF bg, border, fg, fg2, track, fill, tile;
+    COLORREF bg, border, fg, fg2, track, fill;
 } g_pw;
 
 static void progress_config(const wchar_t *style, const wchar_t *title) {
@@ -514,13 +514,61 @@ static void fill_rect(HDC dc, int l, int t, int r, int b, COLORREF c) {
     DeleteObject(br);
 }
 
-static void round_rect(HDC dc, int l, int t, int r, int b, int radius, COLORREF c) {
-    HBRUSH br = CreateSolidBrush(c), ob = (HBRUSH)SelectObject(dc, br);
-    HPEN op = (HPEN)SelectObject(dc, GetStockObject(NULL_PEN));
-    RoundRect(dc, l, t, r + 1, b + 1, radius, radius); /* NULL_PEN: one pixel short */
-    SelectObject(dc, ob);
-    SelectObject(dc, op);
-    DeleteObject(br);
+/* the back buffer is a top-down 32-bit DIB: shapes are drawn into it
+ * directly, antialiased by 4 x 4 supersampling (integers only) */
+static DWORD *g_bits;
+static int g_stride;
+
+static DWORD to_pixel(COLORREF c) {
+    return ((DWORD)GetRValue(c) << 16) | ((DWORD)GetGValue(c) << 8) | GetBValue(c);
+}
+
+static DWORD mix_pixel(DWORD a, DWORD b, int t /* 0..256: share of b */) {
+    DWORD out = 0;
+    int shift;
+    for (shift = 0; shift <= 16; shift += 8) {
+        int ca = (a >> shift) & 255, cb = (b >> shift) & 255;
+        out |= (DWORD)(ca + (cb - ca) * t / 256) << shift;
+    }
+    return out;
+}
+
+/* is (x, y) inside a w x h rectangle with corner radius r (eighths of a pixel)? */
+static int inside_round(int x, int y, int w, int h, int r) {
+    int dx, dy;
+    if (x < 0 || y < 0 || x >= w || y >= h) return 0;
+    dx = x < r ? r - x : x > w - r ? x - (w - r) : 0;
+    dy = y < r ? r - y : y > h - r ? y - (h - r) : 0;
+    return dx * dx + dy * dy <= r * r;
+}
+
+/* rounded rectangle at (x, y), size w x h pixels, radius r8 (eighths of a
+ * pixel), filled with a 145 degree gradient from c0 to c1 (CSS
+ * linear-gradient(145deg, ...)); ring: a 1 px inner line of white at 15% */
+static void aa_round(int x, int y, int w, int h, int r8, COLORREF c0, COLORREF c1, int ring) {
+    DWORD p0 = to_pixel(c0), p1 = to_pixel(c1);
+    int W = w * 8, H = h * 8, len = w * 574 + h * 819, px_, py, sx, sy;
+    if (r8 > W / 2) r8 = W / 2;
+    if (r8 > H / 2) r8 = H / 2;
+    for (py = 0; py < h; py++) {
+        for (px_ = 0; px_ < w; px_++) {
+            int in = 0, inner = 0, t;
+            DWORD *dst = g_bits + (size_t)(y + py) * g_stride + x + px_, c;
+            for (sy = 0; sy < 4; sy++) {
+                for (sx = 0; sx < 4; sx++) {
+                    int X = px_ * 8 + sx * 2 + 1, Y = py * 8 + sy * 2 + 1;
+                    in += inside_round(X, Y, W, H, r8);
+                    if (ring) inner += inside_round(X - 8, Y - 8, W - 16, H - 16, r8 - 8);
+                }
+            }
+            if (!in) continue;
+            /* sin/cos of 145 degrees: 0.574, -0.819 (y grows downwards) */
+            t = ((2 * px_ + 1 - w) * 574 + (2 * py + 1 - h) * 819) * 128 / (len ? len : 1) + 128;
+            c = mix_pixel(p0, p1, t < 0 ? 0 : t > 256 ? 256 : t);
+            if (ring) c = mix_pixel(c, 0xffffff, (in - inner) * 38 / 16);
+            *dst = mix_pixel(*dst, c, in * 16);
+        }
+    }
 }
 
 static void text_at(HDC dc, const wchar_t *s, int l, int t, int r, int b, HFONT f,
@@ -542,11 +590,27 @@ static void progress_paint(HWND hw) {
     const wchar_t *title = g_progress_title && *g_progress_title ? g_progress_title
                                                                  : g_progress_app;
     int w, h, x, iy, is, tx, bx, bw, by, bh, th, fw;
+    BITMAPINFO bi;
+    void *bits = NULL;
     GetClientRect(hw, &rc);
     w = rc.right;
     h = rc.bottom;
     mem = CreateCompatibleDC(dc);
-    bmp = CreateCompatibleBitmap(dc, w, h);
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h; /* top-down */
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (!bmp || !bits) {
+        if (bmp) DeleteObject(bmp);
+        DeleteDC(mem);
+        EndPaint(hw, &ps);
+        return;
+    }
+    g_bits = (DWORD *)bits;
+    g_stride = w;
     old = (HBITMAP)SelectObject(mem, bmp);
     SetBkMode(mem, TRANSPARENT);
     fill_rect(mem, 0, 0, w, h, g_pw.bg);
@@ -559,31 +623,33 @@ static void progress_paint(HWND hw) {
     x = px(20);
     iy = px(22);
     is = px(32);
-    if (g_pw.icon) {
-        DrawIconEx(mem, x, iy, g_pw.icon, is, is, 0, NULL, DI_NORMAL);
-    } else { /* no icon: a tile with the first letter */
-        round_rect(mem, x, iy, x + is, iy + is, px(12), g_pw.tile);
-        letter[0] = title[0];
-        letter[1] = 0;
-        CharUpperW(letter);
-        text_at(mem, letter, x, iy, x + is, iy + is, g_pw.title_font, RGB(255, 255, 255),
-                DT_CENTER);
-    }
     tx = x + is + px(14);
-    text_at(mem, title, tx, px(19), w - px(20), px(38), g_pw.title_font, g_pw.fg, DT_LEFT);
-    wsprintfW(pct, L"%u%%", (unsigned)(g_pw.permille / 10));
-    text_at(mem, pct, w - px(80), px(38), w - px(20), px(56), g_pw.text_font, g_pw.fg2,
-            DT_RIGHT);
-    text_at(mem, L"Preparing for first start\x2026", tx, px(38), w - px(80), px(56),
-            g_pw.text_font, g_pw.fg2, DT_LEFT);
     bx = px(20);
     bw = w - 2 * bx;
     by = px(72);
     bh = px(3);
     th = px(1) ? px(1) : 1;
     fill_rect(mem, bx, by + (bh - th) / 2, bx + bw, by + (bh - th) / 2 + th, g_pw.track);
+    GdiFlush(); /* GDI is done with the pixels; draw into them directly */
     fw = MulDiv(bw, g_pw.permille, 1000);
-    if (fw > 0) round_rect(mem, bx, by, bx + fw, by + bh, bh, g_pw.fill);
+    if (fw > 0) aa_round(bx, by, fw, bh, MulDiv(12, g_pw.dpi, 96), g_pw.fill, g_pw.fill, 0);
+    if (g_pw.icon) {
+        DrawIconEx(mem, x, iy, g_pw.icon, is, is, 0, NULL, DI_NORMAL);
+    } else { /* no icon: a tile with the first letter */
+        aa_round(x, iy, is, is, MulDiv(56, g_pw.dpi, 96), RGB(0x3a, 0x8d, 0xde),
+                 RGB(0x1e, 0x5f, 0xb4), 1);
+        letter[0] = title[0];
+        letter[1] = 0;
+        CharUpperW(letter);
+        text_at(mem, letter, x, iy, x + is, iy + is, g_pw.letter_font, RGB(255, 255, 255),
+                DT_CENTER);
+    }
+    text_at(mem, title, tx, px(19), w - px(20), px(38), g_pw.title_font, g_pw.fg, DT_LEFT);
+    wsprintfW(pct, L"%u%%", (unsigned)(g_pw.permille / 10));
+    text_at(mem, pct, w - px(80), px(38), w - px(20), px(56), g_pw.text_font, g_pw.fg2,
+            DT_RIGHT);
+    text_at(mem, L"Preparing for first start\x2026", tx, px(38), w - px(80), px(56),
+            g_pw.text_font, g_pw.fg2, DT_LEFT);
     BitBlt(dc, 0, 0, w, h, mem, 0, 0, SRCCOPY);
     SelectObject(mem, old);
     DeleteObject(bmp);
@@ -659,7 +725,6 @@ static HWND progress_modern(void) {
     /* light or dark, accent colors (defaults: Windows 11 blue) */
     user_setting(L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
                  L"AppsUseLightTheme", &light, sizeof(light));
-    g_pw.tile = RGB(0x00, 0x78, 0xd4);
     if (light) {
         g_pw.bg = RGB(0xfb, 0xfb, 0xfb); g_pw.border = RGB(0xd6, 0xd6, 0xd6);
         g_pw.fg = RGB(0x1a, 0x1a, 0x1a); g_pw.fg2 = RGB(0x5f, 0x5f, 0x5f);
@@ -669,16 +734,16 @@ static HWND progress_modern(void) {
         g_pw.fg = RGB(0xff, 0xff, 0xff); g_pw.fg2 = RGB(0xc5, 0xc5, 0xc5);
         g_pw.track = RGB(0x9a, 0x9a, 0x9a); g_pw.fill = RGB(0x4c, 0xc2, 0xff);
     }
-    /* AccentPalette: 8 x RGBA, lightest first; [1] light 2, [3] accent, [4] dark 1 */
+    /* AccentPalette: 8 x RGBA, lightest first; [1] light 2, [4] dark 1 */
     if (user_setting(L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent",
                      L"AccentPalette", palette, sizeof(palette)) == sizeof(palette)) {
         const unsigned char *c = palette + (light ? 16 : 4);
         g_pw.fill = RGB(c[0], c[1], c[2]);
-        g_pw.tile = RGB(palette[12], palette[13], palette[14]);
     }
 
     g_pw.title_font = ui_font(14, FW_SEMIBOLD);
     g_pw.text_font = ui_font(12, FW_NORMAL);
+    g_pw.letter_font = ui_font(15, FW_BOLD);
     g_pw.icon = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1), IMAGE_ICON,
                                   px(32), px(32), LR_DEFAULTCOLOR);
 

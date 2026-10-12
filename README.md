@@ -114,7 +114,7 @@ a plain box with the percentage instead, `"off"` nothing. Under Wine:
 Combine it with `bytecode = true` for a fast first start. `{app_dir}` in
 `[tool.pyxbuild.env]` is the extracted folder (bundled data), `{exe_dir}` the
 folder of the `.exe`. `pyxbuild sign dist/myapp.exe` signs it, archive
-included. The launcher stays free of the C runtime (19 KB, 26 KB with the GUI window; its own DEFLATE
+included. The launcher stays free of the C runtime (19 KB, 27 KB with the GUI window; its own DEFLATE
 decoder).
 
 ### Updates (patch executables)

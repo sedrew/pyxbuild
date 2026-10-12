@@ -138,7 +138,8 @@ pumping messages between chunks; no window when there is no desktop.
 Manifest keys `progress` (absent: modern; `classic`, `off`) and `title`.
 The modern window is drawn with GDI into a double buffer (400 x 96 at
 96 dpi, scaled to the system DPI after `SetProcessDpiAwarenessContext`):
-icon group 1 of the exe or a tile with the title's first letter, the title
+icon group 1 of the exe or a tile with the title's first letter (antialiased
+gradient drawn into the 32-bit DIB back buffer), the title
 (Segoe UI Variable, else Segoe UI), "Preparing for first start...", the
 percentage and a 3 px bar on a 1 px track. Colors: `AppsUseLightTheme` and
 `AccentPalette` from HKCU (Windows 11 blue when absent); on build 22000+
