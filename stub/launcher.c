@@ -431,24 +431,32 @@ static void sweep(const wchar_t *parent, const wchar_t *prefix, const wchar_t *k
 /* A small window while a GUI app is extracted for the first time (pythonw
  * shows nothing for seconds otherwise). Shown only when extracting takes
  * longer than PROGRESS_DELAY_MS; PYX_ONEFILE_PROGRESS=0 disables it, =1 shows
- * it at once. Manifest key "progress": "modern" (default: a dialog with the
- * themed progress bar of comctl32 v6, system font, DPI aware), "classic" (a
- * plain STATIC window with the percentage) or "off". comctl32 is loaded at
- * run time inside the activation context of shell32's manifest (resource
- * 124), so the launcher needs no manifest of its own and no import of it. */
+ * it at once. Manifest key "progress": absent = modern (drawn here in the
+ * Windows 11 style: the app's icon and title, the user's accent color, light
+ * or dark like the system, DPI aware, rounded corners on Windows 11),
+ * "classic" (a plain STATIC window with the percentage) or "off". The
+ * window never takes the focus. Only user32/gdi32 imports; dwmapi, advapi32
+ * and ntdll functions are looked up at run time. */
 #define PROGRESS_DELAY_MS 400
-#define PYX_PBM_SETPOS (WM_USER + 2)
-#define PYX_PBM_SETRANGE32 (WM_USER + 6)
-static HWND g_progress, g_progress_label, g_progress_bar;
+static HWND g_progress;
 static int g_progress_mode = -1; /* -1 unknown, 0 off, 1 immediate, 2 delayed */
 static int g_progress_classic;
 static int g_progress_off;
 static DWORD g_progress_start;
 static const wchar_t *g_progress_app;
+static const wchar_t *g_progress_title;
 
-static void progress_style(const wchar_t *style) {
+static struct {
+    int dpi, permille, own_border;
+    HFONT title_font, text_font;
+    HICON icon;
+    COLORREF bg, border, fg, fg2, track, fill, tile;
+} g_pw;
+
+static void progress_config(const wchar_t *style, const wchar_t *title) {
     g_progress_classic = style && !lstrcmpW(style, L"classic");
     g_progress_off = style && !lstrcmpW(style, L"off");
+    g_progress_title = title;
 }
 
 static void progress_pump(void) {
@@ -479,88 +487,236 @@ static HWND progress_classic(void) {
     return hw;
 }
 
-typedef struct { DWORD size, icc; } pyx_initcc;
-typedef BOOL(WINAPI *pyx_initcc_fn)(const pyx_initcc *);
+static int px(int v) { return MulDiv(v, g_pw.dpi, 96); }
+
+typedef LONG(WINAPI *pyx_regget_fn)(HKEY, LPCWSTR, LPCWSTR, DWORD, LPDWORD, PVOID, LPDWORD);
+
+/* HKCU value into buf; returns its size, 0 when absent */
+static DWORD user_setting(const wchar_t *key, const wchar_t *name, void *buf, DWORD size) {
+    static pyx_regget_fn get;
+    static int tried;
+    DWORD n = size;
+    if (!tried) {
+        HMODULE adv = LoadLibraryW(L"advapi32.dll");
+        tried = 1;
+        if (adv) get = (pyx_regget_fn)GetProcAddress(adv, "RegGetValueW");
+    }
+    if (!get || get(HKEY_CURRENT_USER, key, name, 0x0000ffff /* RRF_RT_ANY */, NULL, buf, &n))
+        return 0;
+    return n;
+}
+
+static void fill_rect(HDC dc, int l, int t, int r, int b, COLORREF c) {
+    RECT rc;
+    HBRUSH br = CreateSolidBrush(c);
+    rc.left = l; rc.top = t; rc.right = r; rc.bottom = b;
+    FillRect(dc, &rc, br);
+    DeleteObject(br);
+}
+
+static void round_rect(HDC dc, int l, int t, int r, int b, int radius, COLORREF c) {
+    HBRUSH br = CreateSolidBrush(c), ob = (HBRUSH)SelectObject(dc, br);
+    HPEN op = (HPEN)SelectObject(dc, GetStockObject(NULL_PEN));
+    RoundRect(dc, l, t, r + 1, b + 1, radius, radius); /* NULL_PEN: one pixel short */
+    SelectObject(dc, ob);
+    SelectObject(dc, op);
+    DeleteObject(br);
+}
+
+static void text_at(HDC dc, const wchar_t *s, int l, int t, int r, int b, HFONT f,
+                    COLORREF c, UINT align) {
+    RECT rc;
+    rc.left = l; rc.top = t; rc.right = r; rc.bottom = b;
+    SelectObject(dc, f);
+    SetTextColor(dc, c);
+    DrawTextW(dc, s, -1, &rc, align | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
+}
+
+/* layout (at 96 dpi): 400 x 96, padding 20, icon 32, bar 3 px at y 72 */
+static void progress_paint(HWND hw) {
+    PAINTSTRUCT ps;
+    RECT rc;
+    HDC dc = BeginPaint(hw, &ps), mem;
+    HBITMAP bmp, old;
+    wchar_t pct[8], letter[2];
+    const wchar_t *title = g_progress_title && *g_progress_title ? g_progress_title
+                                                                 : g_progress_app;
+    int w, h, x, iy, is, tx, bx, bw, by, bh, th, fw;
+    GetClientRect(hw, &rc);
+    w = rc.right;
+    h = rc.bottom;
+    mem = CreateCompatibleDC(dc);
+    bmp = CreateCompatibleBitmap(dc, w, h);
+    old = (HBITMAP)SelectObject(mem, bmp);
+    SetBkMode(mem, TRANSPARENT);
+    fill_rect(mem, 0, 0, w, h, g_pw.bg);
+    if (g_pw.own_border) {
+        fill_rect(mem, 0, 0, w, 1, g_pw.border);
+        fill_rect(mem, 0, h - 1, w, h, g_pw.border);
+        fill_rect(mem, 0, 0, 1, h, g_pw.border);
+        fill_rect(mem, w - 1, 0, w, h, g_pw.border);
+    }
+    x = px(20);
+    iy = px(22);
+    is = px(32);
+    if (g_pw.icon) {
+        DrawIconEx(mem, x, iy, g_pw.icon, is, is, 0, NULL, DI_NORMAL);
+    } else { /* no icon: a tile with the first letter */
+        round_rect(mem, x, iy, x + is, iy + is, px(12), g_pw.tile);
+        letter[0] = title[0];
+        letter[1] = 0;
+        CharUpperW(letter);
+        text_at(mem, letter, x, iy, x + is, iy + is, g_pw.title_font, RGB(255, 255, 255),
+                DT_CENTER);
+    }
+    tx = x + is + px(14);
+    text_at(mem, title, tx, px(19), w - px(20), px(38), g_pw.title_font, g_pw.fg, DT_LEFT);
+    wsprintfW(pct, L"%u%%", (unsigned)(g_pw.permille / 10));
+    text_at(mem, pct, w - px(80), px(38), w - px(20), px(56), g_pw.text_font, g_pw.fg2,
+            DT_RIGHT);
+    text_at(mem, L"Preparing for first start\x2026", tx, px(38), w - px(80), px(56),
+            g_pw.text_font, g_pw.fg2, DT_LEFT);
+    bx = px(20);
+    bw = w - 2 * bx;
+    by = px(72);
+    bh = px(3);
+    th = px(1) ? px(1) : 1;
+    fill_rect(mem, bx, by + (bh - th) / 2, bx + bw, by + (bh - th) / 2 + th, g_pw.track);
+    fw = MulDiv(bw, g_pw.permille, 1000);
+    if (fw > 0) round_rect(mem, bx, by, bx + fw, by + bh, bh, g_pw.fill);
+    BitBlt(dc, 0, 0, w, h, mem, 0, 0, SRCCOPY);
+    SelectObject(mem, old);
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    EndPaint(hw, &ps);
+}
+
+static LRESULT CALLBACK progress_proc(HWND hw, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_PAINT: progress_paint(hw); return 0;
+    case WM_ERASEBKGND: return 1;
+    case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
+    }
+    return DefWindowProcW(hw, msg, wp, lp);
+}
+
+static HFONT ui_font(int size, int weight) {
+    static const wchar_t *face;
+    LOGFONTW lf;
+    HFONT f;
+    memset(&lf, 0, sizeof(lf));
+    lf.lfHeight = -px(size);
+    lf.lfWeight = weight;
+    lf.lfCharSet = DEFAULT_CHARSET;
+    lf.lfQuality = CLEARTYPE_QUALITY;
+    if (!face) { /* Windows 11 ships Segoe UI Variable, older systems Segoe UI */
+        wchar_t got[LF_FACESIZE];
+        HDC dc = GetDC(NULL);
+        face = L"Segoe UI";
+        lstrcpyW(lf.lfFaceName, L"Segoe UI Variable Text");
+        f = CreateFontIndirectW(&lf);
+        if (dc && f) {
+            HGDIOBJ o = SelectObject(dc, f);
+            if (GetTextFaceW(dc, LF_FACESIZE, got) && !lstrcmpiW(got, lf.lfFaceName))
+                face = L"Segoe UI Variable Text";
+            SelectObject(dc, o);
+        }
+        if (dc) ReleaseDC(NULL, dc);
+        if (f) DeleteObject(f);
+    }
+    lstrcpyW(lf.lfFaceName, face);
+    return CreateFontIndirectW(&lf);
+}
+
 typedef BOOL(WINAPI *pyx_dpi_ctx_fn)(HANDLE);
 typedef BOOL(WINAPI *pyx_dpi_fn)(void);
+typedef LONG(WINAPI *pyx_version_fn)(OSVERSIONINFOW *);
+typedef HRESULT(WINAPI *pyx_dwm_attr_fn)(HWND, DWORD, LPCVOID, DWORD);
 
 static HWND progress_modern(void) {
-    wchar_t sys[MAX_PATH], dll[MAX_PATH + 16];
-    ACTCTXW act;
-    HANDLE ctx;
-    ULONG_PTR cookie;
-    HMODULE user32 = GetModuleHandleW(L"user32.dll"), comctl;
+    HMODULE user32 = GetModuleHandleW(L"user32.dll"), ntdll = GetModuleHandleW(L"ntdll.dll");
     pyx_dpi_ctx_fn dpi_ctx = (pyx_dpi_ctx_fn)GetProcAddress(user32, "SetProcessDpiAwarenessContext");
     pyx_dpi_fn dpi_old = (pyx_dpi_fn)GetProcAddress(user32, "SetProcessDPIAware");
-    NONCLIENTMETRICSW ncm;
-    HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
-    RECT r;
+    pyx_version_fn version = ntdll ? (pyx_version_fn)GetProcAddress(ntdll, "RtlGetVersion") : NULL;
+    OSVERSIONINFOW osv;
+    WNDCLASSEXW wc;
+    DWORD light = 1, rounded = 0;
+    unsigned char palette[32];
     HDC dc;
-    int dpi = 96, w, h, pad;
-    DWORD style = WS_POPUP | WS_CAPTION, exstyle = WS_EX_TOPMOST;
     HWND hw;
+    int w, h;
 
     /* sharp on scaled displays (only this process; Python is a child) */
     if (!(dpi_ctx && dpi_ctx((HANDLE)-2 /* SYSTEM_AWARE */)) && dpi_old) dpi_old();
+    g_pw.dpi = 96;
     dc = GetDC(NULL);
     if (dc) {
-        dpi = GetDeviceCaps(dc, LOGPIXELSY);
+        g_pw.dpi = GetDeviceCaps(dc, LOGPIXELSY);
         ReleaseDC(NULL, dc);
     }
-    if (dpi < 96) dpi = 96;
+    if (g_pw.dpi < 96) g_pw.dpi = 96;
 
-    /* visual styles: comctl32 v6 */
-    UINT n = GetSystemDirectoryW(sys, MAX_PATH);
-    if (n && n < MAX_PATH) {
-        lstrcpyW(dll, sys);
-        lstrcatW(dll, L"\\shell32.dll");
-        memset(&act, 0, sizeof(act));
-        act.cbSize = sizeof(act);
-        act.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID | ACTCTX_FLAG_ASSEMBLY_DIRECTORY_VALID;
-        act.lpSource = dll;
-        act.lpAssemblyDirectory = sys;
-        act.lpResourceName = MAKEINTRESOURCEW(124);
-        ctx = CreateActCtxW(&act);
-        if (ctx != INVALID_HANDLE_VALUE) ActivateActCtx(ctx, &cookie); /* kept active */
+    /* light or dark, accent colors (defaults: Windows 11 blue) */
+    user_setting(L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                 L"AppsUseLightTheme", &light, sizeof(light));
+    g_pw.tile = RGB(0x00, 0x78, 0xd4);
+    if (light) {
+        g_pw.bg = RGB(0xfb, 0xfb, 0xfb); g_pw.border = RGB(0xd6, 0xd6, 0xd6);
+        g_pw.fg = RGB(0x1a, 0x1a, 0x1a); g_pw.fg2 = RGB(0x5f, 0x5f, 0x5f);
+        g_pw.track = RGB(0x8a, 0x8a, 0x8a); g_pw.fill = RGB(0x00, 0x5f, 0xb8);
+    } else {
+        g_pw.bg = RGB(0x2b, 0x2b, 0x2b); g_pw.border = RGB(0x48, 0x48, 0x48);
+        g_pw.fg = RGB(0xff, 0xff, 0xff); g_pw.fg2 = RGB(0xc5, 0xc5, 0xc5);
+        g_pw.track = RGB(0x9a, 0x9a, 0x9a); g_pw.fill = RGB(0x4c, 0xc2, 0xff);
     }
-    comctl = LoadLibraryW(L"comctl32.dll");
-    if (comctl) {
-        pyx_initcc_fn init = (pyx_initcc_fn)GetProcAddress(comctl, "InitCommonControlsEx");
-        pyx_initcc icc = {sizeof(pyx_initcc), 0x20 /* ICC_PROGRESS_CLASS */};
-        if (init) init(&icc);
-    }
-
-    memset(&ncm, 0, sizeof(ncm));
-    ncm.cbSize = sizeof(ncm);
-    if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) {
-        HFONT f = CreateFontIndirectW(&ncm.lfMessageFont);
-        if (f) font = f;
+    /* AccentPalette: 8 x RGBA, lightest first; [1] light 2, [3] accent, [4] dark 1 */
+    if (user_setting(L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Accent",
+                     L"AccentPalette", palette, sizeof(palette)) == sizeof(palette)) {
+        const unsigned char *c = palette + (light ? 16 : 4);
+        g_pw.fill = RGB(c[0], c[1], c[2]);
+        g_pw.tile = RGB(palette[12], palette[13], palette[14]);
     }
 
-    pad = MulDiv(16, dpi, 96);
-    w = MulDiv(420, dpi, 96);
-    h = MulDiv(84, dpi, 96);
-    r.left = 0; r.top = 0; r.right = w; r.bottom = h;
-    AdjustWindowRectEx(&r, style, FALSE, exstyle);
-    hw = CreateWindowExW(exstyle, L"#32770", g_progress_app, style,
-                         (GetSystemMetrics(SM_CXSCREEN) - (r.right - r.left)) / 2,
-                         (GetSystemMetrics(SM_CYSCREEN) - (r.bottom - r.top)) / 2,
-                         r.right - r.left, r.bottom - r.top, NULL, NULL, NULL, NULL);
+    g_pw.title_font = ui_font(14, FW_SEMIBOLD);
+    g_pw.text_font = ui_font(12, FW_NORMAL);
+    g_pw.icon = (HICON)LoadImageW(GetModuleHandleW(NULL), MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                  px(32), px(32), LR_DEFAULTCOLOR);
+
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_DROPSHADOW;
+    wc.lpfnWndProc = progress_proc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_APPSTARTING);
+    wc.lpszClassName = L"PyxProgress";
+    RegisterClassExW(&wc);
+    w = px(400);
+    h = px(96);
+    hw = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE, L"PyxProgress",
+                         g_progress_title && *g_progress_title ? g_progress_title
+                                                               : g_progress_app,
+                         WS_POPUP, (GetSystemMetrics(SM_CXSCREEN) - w) / 2,
+                         (GetSystemMetrics(SM_CYSCREEN) - h) / 2, w, h, NULL, NULL,
+                         wc.hInstance, NULL);
     if (!hw) return NULL;
-    g_progress_label = CreateWindowExW(0, L"STATIC", L"", WS_CHILD | WS_VISIBLE | SS_LEFT,
-                                       pad, pad, w - 2 * pad, MulDiv(20, dpi, 96),
-                                       hw, NULL, NULL, NULL);
-    g_progress_bar = CreateWindowExW(0, L"msctls_progress32", L"", WS_CHILD | WS_VISIBLE,
-                                     pad, MulDiv(46, dpi, 96), w - 2 * pad, MulDiv(18, dpi, 96),
-                                     hw, NULL, NULL, NULL);
-    if (g_progress_label) SendMessageW(g_progress_label, WM_SETFONT, (WPARAM)font, TRUE);
-    if (g_progress_bar) SendMessageW(g_progress_bar, PYX_PBM_SETRANGE32, 0, 1000);
+
+    /* Windows 11: rounded corners and the system border (DWMWA_WINDOW_CORNER_PREFERENCE) */
+    memset(&osv, 0, sizeof(osv));
+    osv.dwOSVersionInfoSize = sizeof(osv);
+    if (version && !version(&osv) && osv.dwMajorVersion >= 10 && osv.dwBuildNumber >= 22000) {
+        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+        pyx_dwm_attr_fn attr = dwm ? (pyx_dwm_attr_fn)GetProcAddress(dwm, "DwmSetWindowAttribute")
+                                   : NULL;
+        DWORD round = 2; /* DWMWCP_ROUND */
+        rounded = attr && attr(hw, 33, &round, sizeof(round)) == S_OK;
+    }
+    g_pw.own_border = !rounded;
     return hw;
 }
 
 static void progress_update(ULONGLONG done, ULONGLONG total) {
     wchar_t text[300];
-    unsigned long permille = (unsigned long)(total ? done * 1000 / total : 1000);
+    int permille = (int)(total ? done * 1000 / total : 1000);
     if (g_progress_mode <= 0) return;
     if (!g_progress) {
         if (g_progress_mode == 2 && GetTickCount() - g_progress_start < PROGRESS_DELAY_MS)
@@ -570,15 +726,16 @@ static void progress_update(ULONGLONG done, ULONGLONG total) {
             g_progress_mode = 0;
             return;
         }
+        g_pw.permille = -1;
         ShowWindow(g_progress, SW_SHOWNOACTIVATE);
     }
-    wsprintfW(text, L"Preparing %.200s for its first start… %lu%%", g_progress_app,
-              permille / 10);
     if (g_progress_classic) {
+        wsprintfW(text, L"Preparing %.200s for its first start\x2026 %u%%", g_progress_app,
+                  (unsigned)(permille / 10));
         SetWindowTextW(g_progress, text);
-    } else {
-        if (g_progress_label) SetWindowTextW(g_progress_label, text);
-        if (g_progress_bar) SendMessageW(g_progress_bar, PYX_PBM_SETPOS, permille, 0);
+    } else if (permille != g_pw.permille) {
+        g_pw.permille = permille;
+        InvalidateRect(g_progress, NULL, FALSE);
     }
     UpdateWindow(g_progress);
     progress_pump();
@@ -593,7 +750,7 @@ static void progress_end(void) {
 }
 #else
 #define progress_begin(app) ((void)(app))
-#define progress_style(style) ((void)(style))
+#define progress_config(style, title) ((void)(style), (void)(title))
 #define progress_update(done, total) ((void)(done), (void)(total))
 #define progress_end() ((void)0)
 #endif
@@ -844,7 +1001,7 @@ static wchar_t *onefile_root(const wchar_t *exe, const char *payload, wchar_t **
     HANDLE f;
     int i;
     *temp_dir = NULL;
-    progress_style(manifest_get(payload, "progress"));
+    progress_config(manifest_get(payload, "progress"), manifest_get(payload, "title"));
     if (!hash || lstrlenW(hash) < 12 || !app || !*app)
         fail(L"corrupt onefile manifest", exe);
     for (i = 0; i < 12; i++) short_hash[i] = hash[i];

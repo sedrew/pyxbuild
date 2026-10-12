@@ -94,8 +94,10 @@ def test_onefile_progress_style(tmp_path):
     _tree(tmp_path / "app")
     info = write_archive(tmp_path / "app", tmp_path / "a.pyxarc")
     gui = EntryPoint("app1", "app", "main", gui=True)
-    write_onefile(tmp_path / "m.exe", gui, "win_amd64", info, app="demo")
-    assert "progress" not in decode_manifest((tmp_path / "m.exe").read_bytes())  # modern
+    write_onefile(tmp_path / "m.exe", gui, "win_amd64", info, app="demo",
+                  title="Invoice\nManager")
+    m = decode_manifest((tmp_path / "m.exe").read_bytes())
+    assert "progress" not in m and m["title"] == "Invoice Manager"  # modern
     write_onefile(tmp_path / "c.exe", gui, "win_amd64", info, app="demo", progress="classic")
     assert decode_manifest((tmp_path / "c.exe").read_bytes())["progress"] == "classic"
     with pytest.raises(PyxbuildError, match="progress"):

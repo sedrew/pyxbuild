@@ -48,7 +48,7 @@ COMPILE_FLAGS = [
 LINK_FLAGS = ["-s", "-nostdlib", "-Wl,--entry,pyx_entry"]
 # folder-mode launchers, and onefile launchers that carry the app as an archive
 VARIANTS = ("console", "gui", "onefile-console", "onefile-gui")
-LIBS = ["-lkernel32", "-luser32", "-lgdi32"]  # gdi32: onefile progress font only
+LIBS = ["-lkernel32", "-luser32", "-lgdi32"]  # gdi32: onefile progress window only
 
 
 def zig_command() -> list[str]:

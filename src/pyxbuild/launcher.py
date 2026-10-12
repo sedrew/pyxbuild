@@ -121,6 +121,7 @@ def build_launcher(entry: EntryPoint, target: str, *, python_rel: str,
 
 def write_onefile(dest, entry: EntryPoint, target: str, archive, *, app: str,
                   extract: str = "cache", utf8_mode: bool = False, progress: str = "modern",
+                  title: str | None = None,
                   resources: dict[int, dict[int, bytes]] | None = None) -> None:
     """Write a onefile launcher: stub (+ resources) + archive + manifest.
 
@@ -152,6 +153,8 @@ def write_onefile(dest, entry: EntryPoint, target: str, archive, *, app: str,
     }
     if entry.gui and progress != "modern":
         fields["progress"] = progress
+    if entry.gui and progress == "modern" and title:
+        fields["title"] = " ".join(title.split())  # shown in the first-start window
     with open(dest, "wb") as out:
         out.write(stub)
         with open(archive.path, "rb") as src:

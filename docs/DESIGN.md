@@ -133,16 +133,19 @@ newest one, and abandoned `.tmp-`/trash folders older than ten minutes.
 Folders are renamed to `.pyx-trash-*` before deletion, which Windows refuses
 while a program runs from them.
 
-GUI launchers show a window ("Preparing <app> for its first start… N%")
-when an extraction runs longer than 0.4 s, pumping messages between chunks;
-no window when there is no desktop. Manifest key `progress` (absent =
-modern): the modern window is a `#32770` dialog with a `msctls_progress32`
-bar; comctl32 is loaded at run time inside the activation context of
-shell32.dll's manifest (resource 124), so the bar gets the visual styles of
-comctl32 v6 without a manifest or an import in the launcher; the process
-becomes system-DPI aware and uses the message font from
-`SPI_GETNONCLIENTMETRICS`. `classic` is a single STATIC window, `off` none. `PYX_ONEFILE_PROGRESS`:
-`0` off, `1` at once.
+GUI launchers show a window when an extraction runs longer than 0.4 s,
+pumping messages between chunks; no window when there is no desktop.
+Manifest keys `progress` (absent: modern; `classic`, `off`) and `title`.
+The modern window is drawn with GDI into a double buffer (400 x 96 at
+96 dpi, scaled to the system DPI after `SetProcessDpiAwarenessContext`):
+icon group 1 of the exe or a tile with the title's first letter, the title
+(Segoe UI Variable, else Segoe UI), "Preparing for first start...", the
+percentage and a 3 px bar on a 1 px track. Colors: `AppsUseLightTheme` and
+`AccentPalette` from HKCU (Windows 11 blue when absent); on build 22000+
+`DWMWA_WINDOW_CORNER_PREFERENCE` rounds the corners, otherwise the window
+draws its own 1 px border. `WS_EX_NOACTIVATE`, `CS_DROPSHADOW`; advapi32,
+dwmapi and ntdll are looked up at run time. `classic` is a single STATIC
+window with the text.
 
 Temp mode: `%TEMP%\pyx-<app>-<pid>-<tick>\`, deleted after the child exits;
 our folders older than ten minutes are swept at start.

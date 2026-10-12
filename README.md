@@ -103,18 +103,18 @@ files from disk, so the launcher extracts it:
 
 GUI apps show a small progress window while the first extraction runs
 (only if it takes longer than 0.4 s; `PYX_ONEFILE_PROGRESS=0` turns it off).
-`onefile-progress = "modern"` (default) is a window with the application's
-name, the system font and the themed Windows progress bar, sharp on scaled
-displays; `"classic"` is a plain box with the percentage, `"off"` shows
-nothing (screenshot under Wine, which draws the bar without the Windows
-theme):
+By default it is drawn in the Windows 11 style: the app's icon and name
+(`version-info` `product-name`, else the project name), the user's accent
+color, light or dark like Windows, sharp on scaled displays, rounded corners
+on Windows 11; it never takes the focus. `onefile-progress = "classic"` shows
+a plain box with the percentage instead, `"off"` nothing. Under Wine:
 
 ![Progress window of a onefile GUI app](docs/images/onefile-progress.png)
 
 Combine it with `bytecode = true` for a fast first start. `{app_dir}` in
 `[tool.pyxbuild.env]` is the extracted folder (bundled data), `{exe_dir}` the
 folder of the `.exe`. `pyxbuild sign dist/myapp.exe` signs it, archive
-included. The launcher stays free of the C runtime (17 KB, its own DEFLATE
+included. The launcher stays free of the C runtime (19 KB, 26 KB with the GUI window; its own DEFLATE
 decoder).
 
 ### Updates (patch executables)

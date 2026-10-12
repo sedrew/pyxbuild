@@ -485,7 +485,8 @@ def _write_onefile(cfg: ProjectConfig, tb: TargetBuild, staging: Path, work: Pat
         partial = exe.with_name(exe.name + ".partial")
         write_onefile(partial, entry, tb.target.name, archive, app=cfg.normalized_name,
                       extract=cfg.onefile_extract, utf8_mode=cfg.utf8_mode,
-                      progress=cfg.onefile_progress, resources=res)
+                      progress=cfg.onefile_progress,
+                      title=cfg.version_info.get("product-name") or cfg.name, resources=res)
         os.replace(partial, exe)
         exes.append(exe)
     _log(opts, f"[{tb.target.name}] {archive.files} files, "
