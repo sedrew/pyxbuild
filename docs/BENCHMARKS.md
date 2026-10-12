@@ -35,7 +35,7 @@ Python 3.12, `bytecode = true` for both pyxbuild variants, 7 runs.
 | hello | pyxbuild onefile (cache) | 17.6 MB | 2.70 | **0.20** |
 | hello | pyxbuild onefile, `onefile-extract = "temp"` | 17.6 MB | 3.06 | 3.20 |
 | hello | PyInstaller `--onefile` | 11.5 MB | 1.08 | 1.02 |
-| level1 | pyxbuild onefile (cache) | 69.6 MB | 27.46 ¹ | **0.16** |
+| level1 | pyxbuild onefile (cache) | 69.6 MB | 9.8–27.5 ¹ | **0.16** |
 | level1 | pyxbuild onefile, `onefile-extract = "temp"` | 69.6 MB | 11.30 | 13.78 |
 | level1 | PyInstaller `--onefile` | 49.6 MB | 4.10 | 4.10 |
 
@@ -44,10 +44,12 @@ Python 3.12, `bytecode = true` for both pyxbuild variants, 7 runs.
   hello, 4.1 s for numpy + pandas). Temp mode behaves like PyInstaller, only
   slower: it unpacks the whole application (stdlib and complete wheels) where
   PyInstaller unpacks only what its analysis collected.
-* The first start of the cache mode pays one extraction. ¹ 27.5 s for level1
-  is a single sample and 2.4× the temp-mode extraction of the same archive;
-  `tools/bench.py` now also reports `extract_median_s` (three extractions
-  with `PYX_ONEFILE_RESET=1`) to tell an outlier from a real cost.
+* The first start of the cache mode pays one extraction. ¹ For level1 two
+  CI runs measured 27.5 s ([#28](https://github.com/sedrew/pyxbuild/actions/runs/38275951221))
+  and 9.8 s ([#29](https://github.com/sedrew/pyxbuild/actions/runs/38279385637));
+  in #29 three more extractions (`PYX_ONEFILE_RESET=1`, which also deletes the
+  previous copy) took 12.7 s median, against 11.5 s for temp mode. So the
+  cache adds no cost of its own; 27.5 s was runner noise.
 * The executable is 1.4–1.5× PyInstaller's for the same reason as the folder
   size below; `slim` and `exclude` shrink it.
 * GitHub's runners have Defender real-time scanning turned off; on a normal
