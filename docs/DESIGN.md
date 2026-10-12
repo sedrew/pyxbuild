@@ -42,6 +42,12 @@ Modules: `config.py`, `targets.py` (markers, tags), `runtime.py`, `lock.py`,
   variables, sets `[tool.pyxbuild.env]`, gives GUI apps a log file and an
   error dialog, AppUserModelID, DPI awareness, optional truststore, then
   calls the entry point.
+* **Windowless processes get standard streams**: `_pyxbuild_streams.pth`
+  in site-packages imports `runtime/Lib/_pyxbuild_streams.py` at the start of
+  every interpreter of the bundle. In `pythonw.exe` processes, the
+  multiprocessing and `ProcessPoolExecutor` children included (they never run
+  the start-up shim), `sys.stdout`/`sys.stderr` would be None; they get the
+  GUI log the main process opened (`PYXBUILD_GUI_LOG`), or devnull.
 * **Launcher spawns `runtime\python.exe`** as a child process in a job
   object (like the pip/distlib and uv launchers), instead of embedding
   `python3XX.dll`. Consequences: `sys.executable` is a real interpreter, so

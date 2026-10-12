@@ -56,6 +56,8 @@ cases closed by the changes made after this review.
 | 32 | multiprocessing in frozen exe | [cx_Freeze#2435](https://github.com/marcelotduarte/cx_Freeze/issues/2435) | C — real python.exe |
 | 33 | `dirname(sys.executable)` assumed to be the app folder | [pyinstaller#3915](https://github.com/pyinstaller/pyinstaller/issues/3915) | P — `sys.argv[0]` is the launcher; `{app_dir}` in `env` |
 | 34 | `sys.stdout` is None in GUI apps | [playwright-python#1148](https://github.com/microsoft/playwright-python/issues/1148) | C now — log file under `%LOCALAPPDATA%\<app>\logs` |
+| 60 | multiprocessing in a frozen app re-runs the app (`freeze_support()` forgotten: endless windows) | PyInstaller docs, recurring support question | C — `sys.executable` is a real `pythonw.exe`; tested: tkinter window + `Pool` + `ProcessPoolExecutor`, folder and onefile (`test_gui_mp.py`) |
+| 61 | `sys.stdout` is None in windowless child processes (`AttributeError` on `write`) | found by `test_gui_mp.py` | C now — `_pyxbuild_streams.pth` gives every pythonw process the app's log |
 | 35 | GUI app dies silently | [briefcase#825](https://github.com/beeware/briefcase/discussions/825) | C now — message box + log |
 | 36 | Console windows flash from subprocesses | [pyinstaller#8420](https://github.com/orgs/pyinstaller/discussions/8420) | N (app level) |
 | 37 | Blurry UI on high DPI | [cpython#119174](https://github.com/python/cpython/issues/119174) | C now — per-monitor DPI awareness for GUI scripts |

@@ -356,8 +356,12 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     removed = state.excluded + apply_excludes(site_packages, Excluder(cfg.exclude))
     if removed:
         _log(opts, f"[{tb.target.name}] excluded {len(removed)} file(s)")
-    boot_src = resources_files("pyxbuild").joinpath("_boot", "_pyxbuild_boot.py").read_bytes()
-    (runtime_dir / "Lib" / "_pyxbuild_boot.py").write_bytes(boot_src)
+    boot = resources_files("pyxbuild").joinpath("_boot")
+    for module in ("_pyxbuild_boot.py", "_pyxbuild_streams.py"):
+        (runtime_dir / "Lib" / module).write_bytes(boot.joinpath(module).read_bytes())
+    # imported by site at the start of every interpreter of the bundle,
+    # child processes included (see _pyxbuild_streams.py)
+    (site_packages / "_pyxbuild_streams.pth").write_bytes(b"import _pyxbuild_streams\n")
     if cfg.bytecode:
         _log(opts, f"[{tb.target.name}] compiling bytecode with host Python {tb.python}")
         compile_bytecode(runtime_dir, tb.python)

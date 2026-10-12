@@ -37,8 +37,19 @@ def _expand(value, names):
 
 
 def _gui_streams(log_path):
-    """pythonw.exe has no console: sys.stdout/stderr are None and print() fails."""
-    if sys.stdout is not None and sys.stderr is not None:
+    """pythonw.exe has no console: sys.stdout/stderr are None and print() fails.
+
+    ``_pyxbuild_streams`` (run from a .pth file before this) may already have
+    put a devnull placeholder there; it is replaced by the log, and child
+    processes find the log through PYXBUILD_GUI_LOG.
+    """
+    try:
+        from _pyxbuild_streams import PLACEHOLDER
+    except ImportError:
+        PLACEHOLDER = None
+    missing = [s for s in ("stdout", "stderr")
+               if getattr(sys, s) is None or getattr(sys, s) is PLACEHOLDER]
+    if not missing:
         return None
     try:
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -49,10 +60,10 @@ def _gui_streams(log_path):
     except OSError:
         stream = open(os.devnull, "w", encoding="utf-8")  # noqa: SIM115
         log_path = None  # do not point the user at a file that was not written
-    if sys.stdout is None:
-        sys.stdout = stream
-    if sys.stderr is None:
-        sys.stderr = stream
+    for name in missing:
+        setattr(sys, name, stream)
+    if log_path:
+        os.environ["PYXBUILD_GUI_LOG"] = log_path  # for child processes
     return log_path
 
 
