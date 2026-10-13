@@ -79,6 +79,20 @@ Modules: `config.py`, `targets.py` (markers, tags), `runtime.py`, `lock.py`,
 * **Bytecode** is optional (`bytecode = true`): a host CPython of the same
   X.Y (provided by uv) writes unchecked-hash `.pyc` with `/`-separated
   embedded paths, so builds stay reproducible across hosts.
+  `bytecode-optimize` compiles with `optimize=1|2` but stores the result
+  under the plain `__pycache__` name, which a normal (non `-O`) interpreter
+  loads. `strip-sources` then moves the project's own `.pyc` next to its
+  package as `module.pyc` (sourceless import) and deletes the `.py`.
+* **include** runs after installation: matching project files are copied
+  to the application folder at their relative path; a pattern may not reach
+  `runtime/` or a launcher name, and Windows targets reject reserved names.
+* **Default exclusions** while installing wheels: `*.dylib` (macOS binaries
+  shipped in some cross-platform wheels, e.g. Arcade's 59 MB ffmpeg), plus
+  the `slim` engine presets (`SLIM_SITE_PRESETS`).
+* **Data folder** at run time: `{localappdata}` is `%LOCALAPPDATA%` (Windows)
+  or `$XDG_DATA_HOME` / `~/.local/share`; `{data_dir}` is
+  `{localappdata}/<project name>`. A string `gui-log` is a template expanded
+  with those names and then `time.strftime`.
 * **No-wheel fallbacks** (`fallbacks.py`, `crossbuild.py`): see
   [NO_WHEEL.md](NO_WHEEL.md).
 * **Runtime pinning**: `src/pyxbuild/runtimes.json` lists one

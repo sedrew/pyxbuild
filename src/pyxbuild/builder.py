@@ -53,6 +53,14 @@ SLIM_PRESETS: dict[str, list[str]] = {
     "sqlite": ["Lib/sqlite3/", "DLLs/_sqlite3.pyd", "DLLs/sqlite3.dll"],
 }
 DEFAULT_SLIM = ("tests", "idle", "ensurepip", "turtledemo", "lib2to3")
+# Presets for installed packages (patterns relative to site-packages)
+SLIM_SITE_PRESETS: dict[str, list[str]] = {
+    "panda3d-tools": ["panda3d_tools/"],          # model converters, Maya/Max plugins
+    "arcade-assets": ["arcade/resources/assets/", "arcade/examples/"],  # sample media
+}
+# Mach-O libraries some universal (py3-none-any) wheels carry for macOS:
+# they cannot load on Windows or Linux (arcade ships 59 MB of ffmpeg dylibs)
+FOREIGN_BINARIES = ["*.dylib"]
 # The same presets for POSIX runtimes: {stdlib} is lib/python3.X, extension
 # modules live in {stdlib}/lib-dynload, shared libraries in lib/.
 SLIM_PRESETS_POSIX: dict[str, list[str]] = {
@@ -313,7 +321,8 @@ def _copy_runtime(src: Path, dest: Path, slim: list[str] | None = None, *,
     return skipped
 
 
-def compile_bytecode(runtime_dir: Path, python: str, stdlib: str = "Lib") -> None:
+def compile_bytecode(runtime_dir: Path, python: str, stdlib: str = "Lib",
+                     optimize: int = 0) -> None:
     """Write __pycache__/*.pyc for the whole runtime with a host CPython ``python``.
 
     ``.pyc`` files depend only on the X.Y version, not on the OS. The
@@ -327,8 +336,9 @@ def compile_bytecode(runtime_dir: Path, python: str, stdlib: str = "Lib") -> Non
     # always "Lib/x.py" with "/" (compileall -s/-p would use "\\" on Windows
     # hosts) and files are processed in sorted order.
     driver = (
-        "import os,sys,py_compile\n"
+        "import os,sys,py_compile,importlib.util\n"
         "root=sys.argv[1]\n"
+        "opt=int(sys.argv[3])\n"
         "mode=py_compile.PycInvalidationMode.UNCHECKED_HASH\n"
         "bad=0\n"
         "for d,ds,fs in os.walk(os.path.join(root,sys.argv[2])):\n"
@@ -337,7 +347,9 @@ def compile_bytecode(runtime_dir: Path, python: str, stdlib: str = "Lib") -> Non
         "        if not f.endswith('.py'): continue\n"
         "        src=os.path.join(d,f)\n"
         "        rel=os.path.relpath(src,root).replace(os.sep,'/')\n"
-        "        try: py_compile.compile(src,dfile=rel,doraise=True,invalidation_mode=mode)\n"
+        # the plain name even when optimized: the app runs without -O/-OO
+        "        try: py_compile.compile(src,cfile=importlib.util.cache_from_source(src),"
+        "dfile=rel,doraise=True,invalidation_mode=mode,optimize=opt)\n"
         "        except py_compile.PyCompileError: bad+=1\n"
         "print(bad)\n"
     )
@@ -352,7 +364,7 @@ def compile_bytecode(runtime_dir: Path, python: str, stdlib: str = "Lib") -> Non
         import io
 
         old_argv = sys.argv
-        sys.argv = ["-c", str(runtime_dir), stdlib]
+        sys.argv = ["-c", str(runtime_dir), stdlib, str(optimize)]
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 exec(compile(driver, "<pyxbuild-bytecode>", "exec"), {"__name__": "__main__"})
@@ -360,7 +372,7 @@ def compile_bytecode(runtime_dir: Path, python: str, stdlib: str = "Lib") -> Non
             sys.argv = old_argv
         return
     cmd = [uv_executable(), "run", "--no-project", "--no-config", "--python", python, "--",
-           "python", "-I", "-c", driver, str(runtime_dir), stdlib]
+           "python", "-I", "-c", driver, str(runtime_dir), stdlib, str(optimize)]
     env = {**os.environ, "UV_NO_PROGRESS": "1", "PYTHONHASHSEED": "0"}
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     # files with syntax errors (test data) simply stay without bytecode
@@ -437,6 +449,79 @@ def write_zip(app_dir: Path, zip_path: Path, epoch: int) -> None:
     os.replace(tmp, zip_path)
 
 
+def install_excludes(cfg: ProjectConfig) -> list[str]:
+    """Patterns (relative to site-packages) left out while installing wheels."""
+    presets = [p for name in cfg.slim for p in SLIM_SITE_PRESETS.get(name, [])]
+    return [*cfg.exclude, *presets, *FOREIGN_BINARIES]
+
+
+_INCLUDE_SKIP = {".git", ".hg", ".svn", ".venv", "venv", "__pycache__", "node_modules",
+                 ".tox", ".nox", ".mypy_cache", ".pytest_cache", ".ruff_cache"}
+
+
+def copy_includes(cfg: ProjectConfig, app_dir: Path, target: Target) -> int:
+    """Copy project files matching ``include`` next to the application.
+
+    They land at the same relative path under the application folder
+    ({app_dir} at run time; the extracted folder of a onefile build).
+    """
+    from .install import windows_name_problem
+
+    matcher = Excluder(cfg.include)
+    dist = (cfg.root / cfg.dist_dir).resolve()
+    reserved = {RUNTIME_DIR.lower()} | {target.launcher_name(e.name).lower()
+                                        for e in cfg.entry_points}
+    count = 0
+    for dirpath, dirnames, filenames in os.walk(cfg.root):
+        here = Path(dirpath)
+        dirnames[:] = sorted(d for d in dirnames if d not in _INCLUDE_SKIP
+                             and not d.startswith(".pyxbuild-")
+                             and (here / d).resolve() != dist)
+        for name in sorted(filenames):
+            rel = (here / name).relative_to(cfg.root).as_posix()
+            if not matcher.matches(rel):
+                continue
+            if rel.split("/")[0].lower() in reserved:
+                raise PyxbuildError(f"include: {rel!r} would overwrite the application's "
+                                    f"own {rel.split('/')[0]!r}")
+            if target.is_windows:
+                for part in rel.split("/"):
+                    problem = windows_name_problem(part)
+                    if problem:
+                        raise PyxbuildError(f"include: {rel!r}: {part!r} {problem}")
+            dest = app_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(here / name, dest)
+            count += 1
+    if count == 0:
+        raise PyxbuildError(f"include matched no files: {', '.join(cfg.include)}",
+                            hint="patterns are relative to the project folder, e.g. "
+                                 '"assets/**"')
+    return count
+
+
+def strip_sources(site_packages: Path, project_wheel: Path, python: str) -> int:
+    """Replace the project's own modules by sourceless .pyc files.
+
+    ``foo/bar.py`` becomes ``foo/bar.pyc`` (from the compiled
+    ``__pycache__/bar.cpython-3X.pyc``), which Python imports without the source.
+    """
+    tag = f"cpython-{python.replace('.', '')}"
+    with zipfile.ZipFile(project_wheel) as zf:
+        modules = [n for n in zf.namelist()
+                   if n.endswith(".py") and ".dist-info/" not in n and ".data/" not in n]
+    count = 0
+    for rel in modules:
+        src = site_packages / rel
+        cached = src.parent / "__pycache__" / f"{src.stem}.{tag}.pyc"
+        if not src.is_file() or not cached.is_file():
+            continue  # excluded, or a syntax error left it uncompiled
+        os.replace(cached, src.with_suffix(".pyc"))
+        src.unlink()
+        count += 1
+    return count
+
+
 def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOptions,
              *, launchers: bool = True) -> tuple[list[Path], doctor.Report]:
     """Lay out the application folder in ``app_dir`` (which must not exist)."""
@@ -449,7 +534,7 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
              f"standard library ({', '.join(cfg.slim)})")
     _log(opts, f"[{tb.target.name}] installing "
          f"{len(tb.wheels) + len(tb.local_wheels) + 1} wheel(s)")
-    state = InstallState(runtime_dir, Excluder(cfg.exclude), target, tb.python)
+    state = InstallState(runtime_dir, Excluder(install_excludes(cfg)), target, tb.python)
     for wheel in sorted(tb.wheels, key=lambda p: p.name.lower()):
         install_wheel(wheel, runtime_dir, state)
     for wheel in tb.local_wheels:
@@ -457,7 +542,7 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     install_wheel(tb.project_wheel.path, runtime_dir, state)
     site_packages = runtime_dir / target.site_packages(tb.python)
     # excluded files are skipped while installing; this catches anything left
-    removed = state.excluded + apply_excludes(site_packages, Excluder(cfg.exclude))
+    removed = state.excluded + apply_excludes(site_packages, Excluder(install_excludes(cfg)))
     if removed:
         _log(opts, f"[{tb.target.name}] excluded {len(removed)} file(s)")
     boot = resources_files("pyxbuild").joinpath("_boot")
@@ -469,7 +554,15 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     (site_packages / "_pyxbuild_streams.pth").write_bytes(b"import _pyxbuild_streams\n")
     if cfg.bytecode:
         _log(opts, f"[{tb.target.name}] compiling bytecode with host Python {tb.python}")
-        compile_bytecode(runtime_dir, tb.python, target.stdlib_dir(tb.python))
+        compile_bytecode(runtime_dir, tb.python, target.stdlib_dir(tb.python),
+                         cfg.bytecode_optimize)
+        if cfg.strip_sources:
+            n = strip_sources(site_packages, tb.project_wheel.path, tb.python)
+            _log(opts, f"[{tb.target.name}] strip-sources: {n} project module(s) "
+                 "as .pyc only")
+    if cfg.include:
+        n = copy_includes(cfg, app_dir, target)
+        _log(opts, f"[{tb.target.name}] include: {n} project file(s)")
 
     created: list[Path] = []
     if launchers:
@@ -503,6 +596,8 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
                       for e in cfg.entry_points},
         "boot": cfg.boot_settings(),
     }
+    if cfg.build_info:
+        info["build-info"] = cfg.build_info
     # newline="\n": text mode would write CRLF on Windows and break
     # byte-identical builds across hosts
     (runtime_dir / "pyxbuild.json").write_text(json.dumps(info, indent=2) + "\n",
@@ -516,6 +611,22 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     state.add_findings(report)
     check_imports(runtime_dir, tb.project_wheel.path, report)
     return created, report
+
+
+def windows_only_settings(cfg: ProjectConfig) -> list[str]:
+    """Settings in effect only for Windows targets that the project changed."""
+    found = []
+    if cfg.icon is not None:
+        found.append("icon")
+    if cfg.version_info:
+        found.append("version-info")
+    if cfg.app_id:
+        found.append("app-id")
+    if cfg.onefile_progress != "modern":
+        found.append("onefile-progress")
+    if cfg.cross_compile:
+        found.append("cross-compile")
+    return found
 
 
 def build(cfg: ProjectConfig, opts: BuildOptions | None = None) -> list[BuildResult]:
@@ -537,6 +648,9 @@ def _build(cfg: ProjectConfig, opts: BuildOptions) -> list[BuildResult]:
     results = []
     for target_name in opts.targets or cfg.targets:
         target = get_target(target_name)
+        if not target.is_windows and (ignored := windows_only_settings(cfg)):
+            _log(opts, f"[{target.name}] warning: Windows-only, ignored for this target: "
+                       + ", ".join(ignored))
         with tempfile.TemporaryDirectory(prefix=".pyxbuild-", dir=dist) as tmp:
             work = Path(tmp)
             tb = prepare(cfg, target, opts, work)

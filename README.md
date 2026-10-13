@@ -64,14 +64,18 @@ lock = "pylock.toml"       # default: pylock.win_amd64.toml
 exclude = ["tests/", "*.pyi"]
 zip = true
 utf8-mode = false          # run the app with -X utf8
-icon = "assets/app.ico"    # launcher icon; VERSIONINFO comes from [project]
+icon = "assets/app.ico"    # launcher icon (or a list of PNGs); VERSIONINFO from [project]
+include = ["assets/**", "LICENSE"]  # project files copied next to the app ({app_dir})
 find-links = ["wheels/"]   # extra local wheels (e.g. built in CI)
 slim = ["tests", "idle", "ensurepip", "turtledemo", "lib2to3", "tk"]  # drop stdlib parts
 bytecode = true            # precompiled .pyc: fast first start, read-only folders
+bytecode-optimize = 2      # .pyc without asserts (1) and docstrings (2)
+strip-sources = true       # ship your own modules as .pyc only (implies bytecode)
 pure-python = ["msgpack"]  # build without the optional C extension (no wheel case)
 cross-compile = ["markupsafe"]  # experimental: compile C extensions with zig
 app-id = "Acme.MyApp"      # GUI: taskbar identity (AppUserModelID)
-truststore = true          # use the Windows certificate store for TLS
+truststore = true          # use the system certificate store for TLS
+gui-log = "{data_dir}/logs/%Y-%m-%d.log"  # GUI apps' stdout/stderr; false: none
 
 [tool.pyxbuild.env]        # set at start-up; {app_dir} {data_dir} {localappdata}
 NLTK_DATA = "{app_dir}\\nltk_data"
@@ -79,6 +83,9 @@ NLTK_DATA = "{app_dir}\\nltk_data"
 [tool.pyxbuild.version-info]
 company-name = "ACME"
 copyright = "(c) 2026 ACME"
+
+[tool.pyxbuild.build-info]  # stored in runtime/pyxbuild.json for the app to read
+channel = "beta"
 ```
 
 ```console
@@ -90,6 +97,29 @@ pyxbuild sign dist/myapp-win_amd64 --cert cert.pfx --password-env PFX_PASSWORD
 
 Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
 `--offline` builds from the download cache only.
+
+### Assets, sources and build info
+
+* `include` copies project files that are not part of the package (game
+  assets, `LICENSE`, config templates) to the same relative path in the
+  application folder; read them through `{app_dir}`, e.g.
+  `[tool.pyxbuild.env] GAME_ASSETS = "{app_dir}/assets"`. Patterns are
+  gitignore-style and relative to the project folder; `.git`, virtual
+  environments and the output folder are skipped.
+* `strip-sources = true` keeps only `.pyc` files for your own modules
+  (dependencies keep their sources). It hides the code from a casual look and
+  nothing more: `.pyc` files decompile. `bytecode-optimize = 2` also drops
+  asserts and docstrings.
+* `slim` also knows engine presets that drop files an application never uses:
+  `panda3d-tools` (Panda3D's model converters, ~57 MB) and `arcade-assets`
+  (Arcade's sample `:resources:` images, sounds and examples, ~18 MB; its
+  fonts and shaders stay). macOS `.dylib` files that some wheels carry are
+  never installed for Windows or Linux (Arcade: 59 MB of ffmpeg).
+* `icon` takes an `.ico` or a list of PNG files (each up to 256×256; give 16,
+  32, 48 and 256 px), stored in the launcher as they are.
+* `[tool.pyxbuild.build-info]` is stored as `"build-info"` in
+  `runtime/pyxbuild.json` (`os.path.join(sys.prefix, "pyxbuild.json")`), e.g.
+  a release channel or commit for an About box.
 
 ### Linux applications
 
@@ -111,9 +141,10 @@ dist/myapp-linux_x86_64/
   versions are removed unless a copy is still running.
 * Console scripts of dependencies (`runtime/bin/*`) are relocatable shell/Python
   scripts, so the folder can be moved anywhere.
-* Not (yet) for Linux: the Windows-specific options (icon, version info, GUI
-  log and message box, `truststore` store, patch executables, signing) and the
-  DLL check; `{data_dir}` is `~/<app>` for now.
+* `{data_dir}` is `$XDG_DATA_HOME/<app>` (default `~/.local/share/<app>`).
+* Windows-only, ignored with a warning for Linux targets: `icon`,
+  `version-info`, `app-id`, `onefile-progress`, `cross-compile`; also not for
+  Linux: the error message box, patch executables, signing and the DLL check.
 
 ### In the browser
 
