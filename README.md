@@ -84,6 +84,30 @@ pyxbuild sign dist/myapp-win_amd64 --cert cert.pfx --password-env PFX_PASSWORD
 Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
 `--offline` builds from the download cache only.
 
+### GitHub Actions
+
+Build on any runner and get the application as a workflow artifact:
+
+```yaml
+on: [push, workflow_dispatch]   # workflow_dispatch: a "Run workflow" button
+jobs:
+  windows-app:
+    runs-on: ubuntu-latest   # or macos-latest, windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sedrew/pyxbuild@main
+        with:
+          project: .                 # folder with pyproject.toml
+          args: --mode onefile       # any `pyxbuild build` options
+          artifact-name: windows-app
+```
+
+The action installs pyxbuild (`pyxbuild-version`, default: the action's own
+commit), caches the downloaded runtime and wheels (`cache: true`), builds into
+a temporary folder (output `dist`) and uploads it (`upload: true`). Edit code
+and press "Run workflow" from the GitHub website or app, on any device, and
+download a ready `.exe`.
+
 ### One file
 
 `mode = "onefile"` (or `pyxbuild build --mode onefile`) produces

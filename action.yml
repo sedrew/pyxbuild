@@ -1,0 +1,95 @@
+name: pyxbuild
+description: Build a Windows x64 application from a Python project (pyproject.toml) on any runner
+author: Sergei
+branding:
+  icon: package
+  color: blue
+
+inputs:
+  project:
+    description: Folder with the project's pyproject.toml
+    default: "."
+  args:
+    description: Extra arguments for `pyxbuild build`, e.g. `--mode onefile --python 3.13`
+    default: ""
+  pyxbuild-version:
+    description: >-
+      pyxbuild to use: "action" (the commit this action was taken from) or a pip
+      requirement such as "pyxbuild==0.3.0"
+    default: action
+  python-version:
+    description: Python that runs pyxbuild on the runner (not the one bundled in the app)
+    default: "3.12"
+  cache:
+    description: Cache the downloaded runtime and wheels between runs (true/false)
+    default: "true"
+  upload:
+    description: Upload the output folder as a workflow artifact (true/false)
+    default: "true"
+  artifact-name:
+    description: Name of the uploaded artifact
+    default: windows-app
+
+outputs:
+  dist:
+    description: Folder with the built application
+    value: ${{ steps.build.outputs.dist }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install pyxbuild
+      shell: bash
+      env:
+        PYXBUILD_REQ: ${{ inputs.pyxbuild-version }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        if [ "$PYXBUILD_REQ" = "action" ]; then
+          python -m pip install --disable-pip-version-check -q "$ACTION_PATH"
+        else
+          python -m pip install --disable-pip-version-check -q "$PYXBUILD_REQ"
+        fi
+        pyxbuild --version
+        echo "PYXBUILD_CACHE_DIR=$RUNNER_TEMP/pyxbuild-cache" >> "$GITHUB_ENV"
+
+    - name: Restore the download cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.temp }}/pyxbuild-cache
+        key: pyxbuild-${{ runner.os }}-${{ hashFiles(format('{0}/pylock*.toml', inputs.project), format('{0}/pyproject.toml', inputs.project)) }}
+        restore-keys: pyxbuild-${{ runner.os }}-
+
+    - name: Build
+      id: build
+      shell: bash
+      env:
+        PROJECT: ${{ inputs.project }}
+        ARGS: ${{ inputs.args }}
+        PYTHONUTF8: "1"
+        UV_NO_PROGRESS: "1"
+      run: |
+        out="$RUNNER_TEMP/pyxbuild-dist"
+        rm -rf "$out"
+        # ARGS is split on purpose: it holds several command-line options
+        # shellcheck disable=SC2086
+        pyxbuild build "$PROJECT" --out "$out" $ARGS
+        echo "dist=$out" >> "$GITHUB_OUTPUT"
+        {
+          echo "### pyxbuild"
+          echo '```'
+          (cd "$out" && find . -maxdepth 2 -type f | sort | head -50)
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Upload
+      if: inputs.upload == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ steps.build.outputs.dist }}
+        include-hidden-files: true
