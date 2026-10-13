@@ -1,0 +1,74 @@
+"""Build the project's own wheel (PEP 517, via ``uv build``) and read its metadata."""
+
+from __future__ import annotations
+
+import email.parser
+import os
+import subprocess
+import sys
+import zipfile
+from dataclasses import dataclass
+from pathlib import Path
+
+from packaging.utils import parse_wheel_filename
+
+from .errors import PyxbuildError
+from .lock import uv_executable
+
+
+@dataclass(frozen=True)
+class BuiltWheel:
+    path: Path
+    name: str
+    version: str
+    requires_dist: list[str]
+    is_pure: bool
+    summary: str | None = None
+
+
+def read_wheel_metadata(path: Path) -> tuple[str, str, list[str], str | None]:
+    with zipfile.ZipFile(path) as zf:
+        meta_name = next((n for n in zf.namelist()
+                          if n.endswith(".dist-info/METADATA") and n.count("/") == 1), None)
+        if meta_name is None:
+            raise PyxbuildError(f"{path.name} has no .dist-info/METADATA")
+        # METADATA is UTF-8 (core metadata spec). Parse it as text, like
+        # importlib.metadata: BytesParser's compat32 policy returns
+        # email.header.Header objects for non-ASCII values ("Summary: Тест").
+        text = zf.read(meta_name).decode("utf-8", errors="replace")
+        msg = email.parser.Parser().parsestr(text, headersonly=True)
+    return msg["Name"], msg["Version"], msg.get_all("Requires-Dist") or [], msg["Summary"]
+
+
+def build_wheel(source: Path, out_dir: Path, *, quiet: bool = False,
+                env: dict[str, str] | None = None) -> BuiltWheel:
+    """Build a wheel for ``source`` (a project directory or an sdist).
+
+    Only pure-Python wheels can go into a cross-built application: a wheel
+    with compiled code built on the host would contain host binaries.
+    """
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if source.is_dir() and (sys.platform == "emscripten"
+                            or os.environ.get("PYXBUILD_WHEEL_BUILDER") == "builtin"):
+        from .purewheel import build_pure_wheel  # no processes in the browser
+
+        wheel = build_pure_wheel(source, out_dir)
+        name, version, requires, summary = read_wheel_metadata(wheel)
+        return BuiltWheel(wheel, name, version, requires, True, summary)
+    before = set(out_dir.glob("*.whl"))
+    cmd = [uv_executable(), "build", "--wheel", "--out-dir", str(out_dir), str(source)]
+    if quiet:
+        cmd.append("--quiet")
+    env = {**(os.environ if env is None else env), "UV_NO_PROGRESS": "1"}
+    env.setdefault("SOURCE_DATE_EPOCH", "315532800")
+    proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    if proc.returncode != 0:
+        raise PyxbuildError(f"building a wheel for {source} failed:\n{proc.stderr.strip()}")
+    built = sorted(set(out_dir.glob("*.whl")) - before) or sorted(out_dir.glob("*.whl"))
+    if not built:
+        raise PyxbuildError(f"uv build produced no wheel for {source}")
+    wheel = max(built, key=lambda p: p.stat().st_mtime)
+    _, _, _, tags = parse_wheel_filename(wheel.name)
+    pure = all(t.abi == "none" and t.platform == "any" for t in tags)
+    name, version, requires, summary = read_wheel_metadata(wheel)
+    return BuiltWheel(wheel, name, version, requires, pure, summary)

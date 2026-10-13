@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=1.24"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pyxbuild"
+dynamic = ["version"]
+description = "Build Windows x64 applications from a standard Python project on any OS"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+authors = [{ name = "Sergei" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Build Tools",
+]
+dependencies = [
+    "packaging>=24.2",
+    "installer>=1.0.1",  # 1.0 refuses wheel entries outside the target
+    "uv>=0.8",
+    "resolvelib>=1.1",  # built-in resolver where uv cannot run (the browser)
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6", "pefile>=2023.2.7"]
+stubs = ["ziglang==0.16.0"]
+cross = ["ziglang>=0.13"]
+
+[project.scripts]
+pyxbuild = "pyxbuild.cli:main"
+
+[project.urls]
+Source = "https://github.com/sedrew/pyxbuild"
+
+[tool.hatch.version]
+path = "src/pyxbuild/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pyxbuild"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "stub", "tools", "tests", "docs", "README.md", "LICENSE"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "network: needs access to PyPI / GitHub releases",
+    "wine: runs built executables (Wine on Linux/macOS, natively on Windows)",
+    "slow: builds full applications",
+    "golden: golden-set builds (many large packages)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests", "tools"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["pyxbuild", "conftest", "test_launcher_pe"]
