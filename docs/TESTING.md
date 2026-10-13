@@ -40,6 +40,20 @@ Known Wine quirks: Python fails to initialise stdio when stdout/stderr are
 redirected to a regular file (use pipes); there is no display, so the golden
 tests skip `Tk()` windows and run Qt with `QT_QPA_PLATFORM=offscreen`.
 
+## Browser sandbox
+
+```bash
+pip install -e . "mkdocs<2" "mkdocs-material<10"
+python tools/build_site.py --runtimes 3.12          # build/site
+python tools/web_mirror.py record build/mirror rich # PyPI slice the example needs
+python tools/web_mirror.py serve build/mirror &      # site + mirror on :8765
+npm i playwright-core && node tools/web_e2e.mjs http://127.0.0.1:8765/ hello-web.exe
+```
+
+CI (`sandbox`) does the same in headless Chrome and runs the exe on
+windows-latest (`sandbox-run`). The built-in resolver is compared with uv in
+`tests/test_resolve.py::test_same_versions_as_uv` (network).
+
 ## Golden set
 
 | level | project | packages | runs on |

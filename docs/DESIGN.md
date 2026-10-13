@@ -170,6 +170,37 @@ executables run the newest installed version. Applying a patch removes no
 versions; the next extraction by a full executable sweeps as usual (an old
 executable whose folder was swept extracts itself again).
 
+## In the browser (Pyodide)
+
+`docs/assets/try/worker.js` loads Pyodide, extracts the pyxbuild wheel and
+its pure dependencies (packaging, installer, resolvelib) into
+site-packages and calls `pyxbuild.cli.main(["build", ...])` on a project
+written to the in-memory file system. What differs on `sys.platform ==
+"emscripten"`:
+
+* HTTP: `download.http_get` and `_download_to` use a synchronous
+  `XMLHttpRequest` with `responseType = "arraybuffer"` (allowed in workers), so
+  the build stays synchronous; the browser does TLS and caching. PyPI's JSON
+  API, `.metadata` files and files.pythonhosted.org allow cross-origin
+  requests; GitHub release downloads do not, so `PYXBUILD_RUNTIME_MIRROR`
+  points at `runtimes/<release>/<file>` on the site (`tools/build_site.py`).
+* Resolution: `lock.compile_lock` calls `resolve.resolve` (resolvelib, the
+  resolver of pip and PDM): candidates are versions with a wheel for the
+  target tags and a matching `requires-python`, not yanked, prereleases only
+  when asked for; dependencies come from PEP 658 metadata (or the wheel's
+  `METADATA` when missing). Extras use `name[extra]` identifiers that pin the
+  base package. The lock is ordinary PEP 751 with `resolver = "pyxbuild ...
+  (resolvelib)"` in `[tool.pyxbuild]`. Not supported: find-links, extra
+  indexes, sdists, direct URLs.
+* Project wheel: `purewheel.build_pure_wheel` packs `src/<pkg>`, `<pkg>/` or
+  `<module>.py` named after the project with static `[project]` metadata.
+* Onefile: compression runs inline (no threads). Bytecode: compiled in-process
+  when the bundled Python has the same X.Y as Pyodide's (3.13), else refused.
+
+`tools/web_mirror.py` records the PyPI responses a build needs and serves them
+with the site; `tools/web_e2e.mjs` drives the page in headless Chrome; CI runs
+the downloaded `.exe` on Windows.
+
 ## Environment variables
 
 | variable | effect |
@@ -178,6 +209,8 @@ executable whose folder was swept extracts itself again).
 | `PYXBUILD_OFFLINE` | never download; fail if something is not cached |
 | `PYXBUILD_RUNTIME_MIRROR` | base URL instead of GitHub releases |
 | `PYXBUILD_UV` | uv executable to use |
+| `PYXBUILD_RESOLVER` | `uv` (default) or `python`: the built-in resolver (default in Pyodide) |
+| `PYXBUILD_WHEEL_BUILDER` | `builtin`: pack the project in-process instead of `uv build` (default in Pyodide) |
 | `PYX_ONEFILE_DIR` | (end user) where onefile apps are extracted; default `%LOCALAPPDATA%\pyx` |
 | `PYX_ONEFILE_RESET` | (end user) `1`: extract a onefile app again |
 | `SOURCE_DATE_EPOCH` | timestamps written to files and the zip (default 1980-01-01) |

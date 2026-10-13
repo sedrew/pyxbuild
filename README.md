@@ -21,6 +21,10 @@ dist/myapp-win_amd64/
 Copy the folder (or the `--zip`) to any Windows 10/11 x64 machine; no Python
 or Visual C++ Redistributable needs to be installed.
 
+**[Try it in the browser](https://sedrew.github.io/pyxbuild/try/)**: edit a
+small project and download the `.exe`, from any device (Android and iPad
+included), nothing to install.
+
 ## How it works
 
 Building an `.exe` here means *assembling*, not compiling:
@@ -83,6 +87,18 @@ pyxbuild sign dist/myapp-win_amd64 --cert cert.pfx --password-env PFX_PASSWORD
 
 Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
 `--offline` builds from the download cache only.
+
+### In the browser
+
+The [sandbox](https://sedrew.github.io/pyxbuild/try/) runs the real
+pyxbuild in [Pyodide](https://pyodide.org) inside a web worker: no processes
+there, so uv is replaced by a built-in resolver (resolvelib over PyPI's JSON
+API and PEP 658 metadata; same versions as uv in our checks) and the project
+wheel is packed in-process (static `[project]` metadata, `src/<pkg>`,
+`<pkg>/` or `<module>.py`). Wheels and the Windows runtime are downloaded by
+the browser; the runtimes are served by the site because GitHub release
+downloads do not allow cross-origin requests. The built-in resolver also works
+on the command line: `PYXBUILD_RESOLVER=python pyxbuild build`.
 
 ### GitHub Actions
 

@@ -23,6 +23,7 @@ dependencies = [
     "packaging>=24.2",
     "installer>=1.0.1",  # 1.0 refuses wheel entries outside the target
     "uv>=0.8",
+    "resolvelib>=1.1",  # built-in resolver where uv cannot run (the browser)
 ]
 
 [project.optional-dependencies]

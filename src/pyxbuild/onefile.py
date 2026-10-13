@@ -28,6 +28,7 @@ import concurrent.futures as cf
 import hashlib
 import os
 import struct
+import sys
 import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -95,6 +96,21 @@ def _compress(chunk: bytes, level: int) -> bytes:
     return data if len(data) < len(chunk) else chunk
 
 
+class _Inline:
+    """Executor stand-in where threads cannot start (Pyodide)."""
+
+    def __enter__(self) -> _Inline:
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+    def submit(self, fn, *args) -> cf.Future:
+        fut: cf.Future = cf.Future()
+        fut.set_result(fn(*args))
+        return fut
+
+
 def write_archive(root: Path, out: Path, *, skip: set[str] = frozenset(),
                   level: int = 9) -> ArchiveInfo:
     """Write the archive of ``root`` (minus ``skip``, relative POSIX paths) to ``out``."""
@@ -108,7 +124,8 @@ def write_archive(root: Path, out: Path, *, skip: set[str] = frozenset(),
     with open(out, "wb") as f:
         f.write(b"\0" * table_end)
         workers = min(8, os.cpu_count() or 1)
-        with cf.ThreadPoolExecutor(workers) as pool:  # zlib releases the GIL
+        executor = _Inline() if sys.platform == "emscripten" else cf.ThreadPoolExecutor(workers)
+        with executor as pool:  # zlib releases the GIL
             pending: list[tuple[cf.Future[bytes], int]] = []
 
             def drain(limit: int) -> None:

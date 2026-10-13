@@ -106,7 +106,53 @@ def fetch(url: str, sha256: str, filename: str, *, quiet: bool = False) -> Path:
     return dest
 
 
+def http_get(url: str, headers: dict[str, str] | None = None) -> bytes:
+    """GET ``url`` into memory (index pages, metadata), with retries."""
+    if sys.platform == "emscripten":
+        return _browser_get(url, headers or {})
+    last: Exception | None = None
+    for attempt in range(4):
+        if attempt:
+            time.sleep(2**attempt)
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, **(headers or {})})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                return resp.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in (403, 404, 410):
+                raise DownloadError(f"cannot download {url}: HTTP {exc.code}") from None
+            last = exc
+        except (urllib.error.URLError, OSError) as exc:
+            last = exc
+    raise DownloadError(f"cannot download {url}: {last}")
+
+
+def _browser_get(url: str, headers: dict[str, str]) -> bytes:
+    """Pyodide in a web worker: a synchronous XMLHttpRequest (allowed there),
+    so the whole build can stay synchronous. The browser does TLS, proxies
+    and caching; the server must allow cross-origin requests (PyPI does)."""
+    from js import Uint8Array, XMLHttpRequest  # type: ignore[import-not-found]
+
+    req = XMLHttpRequest.new()
+    req.open("GET", url, False)
+    req.responseType = "arraybuffer"
+    for key, value in headers.items():
+        req.setRequestHeader(key, value)
+    try:
+        req.send(None)
+    except Exception as exc:  # noqa: BLE001 - a JsException: network or CORS failure
+        raise DownloadError(f"cannot download {url}: {exc}") from None
+    if req.status != 200:
+        raise DownloadError(f"cannot download {url}: HTTP {req.status}")
+    return bytes(Uint8Array.new(req.response).to_py())
+
+
 def _download_to(url: str, out, *, quiet: bool, filename: str) -> None:
+    if sys.platform == "emscripten" and "://" in url and not url.startswith("file://"):
+        if not quiet:
+            print(f"  downloading {filename}", file=sys.stderr)
+        out.write(_browser_get(url, {}))
+        return
     if url.startswith("file://") or "://" not in url:
         src = Path(urllib.request.url2pathname(url[7:])) if url.startswith("file://") else Path(url)
         with open(src, "rb") as f:

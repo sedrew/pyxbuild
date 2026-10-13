@@ -5,6 +5,7 @@ from __future__ import annotations
 import email.parser
 import os
 import subprocess
+import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,13 @@ def build_wheel(source: Path, out_dir: Path, *, quiet: bool = False,
     with compiled code built on the host would contain host binaries.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    if source.is_dir() and (sys.platform == "emscripten"
+                            or os.environ.get("PYXBUILD_WHEEL_BUILDER") == "builtin"):
+        from .purewheel import build_pure_wheel  # no processes in the browser
+
+        wheel = build_pure_wheel(source, out_dir)
+        name, version, requires, summary = read_wheel_metadata(wheel)
+        return BuiltWheel(wheel, name, version, requires, True, summary)
     before = set(out_dir.glob("*.whl"))
     cmd = [uv_executable(), "build", "--wheel", "--out-dir", str(out_dir), str(source)]
     if quiet:

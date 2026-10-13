@@ -166,7 +166,10 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
             state = "missing" if lock is None else "out of date"
             raise ResolveError(f"lock file {lock_path} is {state}",
                                hint="run `pyxbuild lock` and commit the result")
-        _log(opts, f"[{target.name}] resolving {len(requirements)} requirement(s) with uv")
+        from .lock import resolver_name
+
+        engine = "uv" if resolver_name() == "uv" else "the built-in resolver"
+        _log(opts, f"[{target.name}] resolving {len(requirements)} requirement(s) with {engine}")
         compile_lock(inputs, target, runtime.spec.version, lock_path, quiet=True)
         lock = read_lock(lock_path)
     assert lock is not None
@@ -297,6 +300,24 @@ def compile_bytecode(runtime_dir: Path, python: str) -> None:
         "        except py_compile.PyCompileError: bad+=1\n"
         "print(bad)\n"
     )
+    if sys.platform == "emscripten":  # no processes: compile here if the versions match
+        if f"{sys.version_info[0]}.{sys.version_info[1]}" != python:
+            raise PyxbuildError(
+                f"bytecode = true needs Python {python} to compile, and this browser runs "
+                f"Python {sys.version_info[0]}.{sys.version_info[1]}",
+                hint=f'set python = "{sys.version_info[0]}.{sys.version_info[1]}" or '
+                     "bytecode = false")
+        import contextlib
+        import io
+
+        old_argv = sys.argv
+        sys.argv = ["-c", str(runtime_dir)]
+        try:
+            with contextlib.redirect_stdout(io.StringIO()):
+                exec(compile(driver, "<pyxbuild-bytecode>", "exec"), {"__name__": "__main__"})
+        finally:
+            sys.argv = old_argv
+        return
     cmd = [uv_executable(), "run", "--no-project", "--no-config", "--python", python, "--",
            "python", "-I", "-c", driver, str(runtime_dir)]
     env = {**os.environ, "UV_NO_PROGRESS": "1", "PYTHONHASHSEED": "0"}

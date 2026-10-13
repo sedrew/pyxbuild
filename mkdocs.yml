@@ -1,0 +1,65 @@
+site_name: pyxbuild
+site_description: Build Windows x64 applications from a standard Python project on any OS
+site_url: https://sedrew.github.io/pyxbuild/
+repo_url: https://github.com/sedrew/pyxbuild
+repo_name: sedrew/pyxbuild
+edit_uri: edit/main/docs/
+# tools/build_site.py copies docs/ and README.md (as index.md) into this folder
+docs_dir: build/site-src
+site_dir: build/site
+
+theme:
+  name: material
+  icon:
+    logo: material/package-variant-closed
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: blue
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: light blue
+      toggle: { icon: material/weather-sunny, name: Light mode }
+  features:
+    - navigation.tabs
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - search.highlight
+
+nav:
+  - Home: index.md
+  - Try in the browser: try.md
+  - Guides:
+      - When a package has no wheel: NO_WHEEL.md
+      - Compatibility: COMPATIBILITY.md
+      - Real applications: APPS.md
+      - Benchmarks: BENCHMARKS.md
+  - Internals:
+      - Design: DESIGN.md
+      - Testing: TESTING.md
+      - Real-world issues: REAL_WORLD_ISSUES.md
+      - Open questions: OPEN_QUESTIONS.md
+      - Go and TypeScript: GO_TYPESCRIPT.md
+
+extra_css:
+  - assets/try/try.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.highlight: { anchor_linenums: true }
+  - pymdownx.superfences
+  - pymdownx.details
+
+validation:
+  links:
+    not_found: info
+    anchors: info

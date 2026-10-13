@@ -72,6 +72,48 @@ jobs:
         shell: bash
         run: '"${{ steps.pyx.outputs.dist }}/hello.exe"'
 
+  sandbox:
+    name: browser sandbox (Pyodide in headless Chrome)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install -e . "mkdocs<2" "mkdocs-material<10"
+      - name: build the site (Python 3.12 runtime only)
+        run: python tools/build_site.py --runtimes 3.12
+      - name: record the PyPI slice the example needs
+        run: python tools/web_mirror.py record build/mirror rich
+      - name: build in the browser
+        run: |
+          python tools/web_mirror.py serve build/mirror --port 8765 &
+          mkdir -p "$RUNNER_TEMP/e2e" && cp tools/web_e2e.mjs "$RUNNER_TEMP/e2e/"
+          cd "$RUNNER_TEMP/e2e" && npm init -y >/dev/null && npm i --no-save playwright-core@1.55.0
+          CHROMIUM="$(command -v google-chrome)" node web_e2e.mjs http://127.0.0.1:8765/ "$GITHUB_WORKSPACE/hello-web.exe"
+          head -c 2 "$GITHUB_WORKSPACE/hello-web.exe" | grep -q MZ
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-exe
+          path: hello-web.exe
+
+  sandbox-run:
+    name: run the browser-built exe on windows-latest
+    needs: sandbox
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: sandbox-exe
+      - shell: bash
+        run: |
+          out="$(echo | ./hello-web.exe)"
+          echo "$out"
+          echo "$out" | grep -q "Built in the browser with pyxbuild"
+
   build-golden:
     name: build golden apps on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
