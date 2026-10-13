@@ -84,7 +84,9 @@ def public_wheels(lock_path: Path, python: str) -> list[tuple[str, str, int | No
     env = WIN_AMD64.marker_environment(python)
     minor = ".".join(python.split(".")[:2])
     out = []
-    for sel in select_files(read_lock(lock_path), WIN_AMD64, env, WIN_AMD64.tags(minor)):
+    # allow_sdist: sdist-only packages are built into the app; they travel in the patch
+    for sel in select_files(read_lock(lock_path), WIN_AMD64, env, WIN_AMD64.tags(minor),
+                            allow_sdist=True):
         if sel.file is None or not sel.is_wheel:
             continue
         if urlparse(sel.file.url).scheme not in ("https", "http"):

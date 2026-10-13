@@ -14,7 +14,7 @@ from pyxbuild.config import EntryPoint
 from pyxbuild.errors import PyxbuildError
 from pyxbuild.launcher import write_onefile
 from pyxbuild.onefile import write_archive
-from pyxbuild.patch import make_patch, patch_payload
+from pyxbuild.patch import make_patch, patch_payload, public_wheels
 
 
 def _apply_module():
@@ -139,8 +139,31 @@ def test_apply_builds_the_new_version_next_to_the_old(versions, tmp_path):
     assert os.stat(new / "runtime" / "python.exe").st_ino == \
         os.stat(old / "runtime" / "python.exe").st_ino  # hard link, no copy
     assert not [p for p in appdir.iterdir() if ".tmp-" in p.name]
-    # applying again is harmless
-    assert Path(mod.apply(str(payload), str(appdir), log=lambda *a: None)) == new
+    # applying again is harmless and does not claim an update
+    logged = []
+    assert Path(mod.apply(str(payload), str(appdir), log=logged.append)) == new
+    assert logged == ["demo 2.0 is already installed"]
+
+
+def test_public_wheels_skips_sdist_only_packages(tmp_path, monkeypatch):
+    """--fetch-public with a package that only has an sdist (built into the app)."""
+    sha = "0" * 64
+    lock = tmp_path / "pylock.win_amd64.toml"
+    lock.write_text(f"""lock-version = "1.0"
+[[packages]]
+name = "idna"
+version = "3.10"
+[[packages.wheels]]
+url = "https://files.example/idna-3.10-py3-none-any.whl"
+hashes = {{ sha256 = "{sha}" }}
+[[packages]]
+name = "odfpy"
+version = "1.4.1"
+sdist = {{ url = "https://files.example/odfpy-1.4.1.tar.gz", hashes = {{ sha256 = "{sha}" }} }}
+""")
+    monkeypatch.setattr("pyxbuild.download.fetch", lambda url, *a, **k: tmp_path / "w.whl")
+    got = public_wheels(lock, "3.12")
+    assert [url.rsplit("/", 1)[-1] for url, *_ in got] == ["idna-3.10-py3-none-any.whl"]
 
 
 def test_apply_refuses_a_damaged_base(versions, tmp_path):

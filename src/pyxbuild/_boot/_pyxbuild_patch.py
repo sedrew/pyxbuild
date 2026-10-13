@@ -111,7 +111,8 @@ def apply(payload, appdir, log=print):
 
     mutex = _mutex("Local\\pyx-onefile-" + target12)
     try:
-        if os.path.isfile(os.path.join(target, ".pyx-complete")):
+        installed = os.path.isfile(os.path.join(target, ".pyx-complete"))
+        if installed:
             log(f"{patch['app']} {patch['version']} is already installed")
         else:
             _assemble(patch, payload, base, target, log)
@@ -127,7 +128,8 @@ def apply(payload, appdir, log=print):
             continue
         with open(nxt, "w", encoding="ascii") as f:
             f.write(target12 + "\n")
-    log(f"updated {patch['app']} to {patch['version']}")
+    if not installed:
+        log(f"updated {patch['app']} to {patch['version']}")
     return target
 
 
