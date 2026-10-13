@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "pyxbuild"
 dynamic = ["version"]
-description = "Build Windows x64 applications from a standard Python project on any OS"
+description = "Build Windows x64 and Linux applications from a standard Python project on any OS"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]

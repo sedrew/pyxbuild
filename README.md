@@ -28,17 +28,19 @@ included), nothing to install.
 
 ## How it works
 
-Building an `.exe` here means *assembling*, not compiling:
+Building an `.exe` (or a Linux executable) here means *assembling*, not compiling:
 
-1. download a prebuilt CPython for Windows ([python-build-standalone],
+1. download a prebuilt CPython for the target ([python-build-standalone],
    pinned by version and sha256);
-2. resolve dependencies **for the target** (`sys_platform == "win32"`,
+2. resolve dependencies **for the target** (e.g. `sys_platform == "win32"`,
    `platform_machine == "AMD64"`) with `uv pip compile --python-platform`,
    written to a standard `pylock.toml` (PEP 751);
-3. install the `win_amd64` wheels into the runtime's `site-packages` with the
-   PyPA `installer` library — no code from the wheels is run;
+3. install the target's wheels (`win_amd64`, `manylinux_*`) into the runtime's
+   `site-packages` with the PyPA `installer` library — no code from the wheels
+   is run;
 4. copy a small prebuilt launcher (C, compiled once with `zig cc` and
-   shipped inside pyxbuild) and append a manifest naming the entry point.
+   shipped inside pyxbuild: PE for Windows, static ELF for Linux) and append a
+   manifest naming the entry point.
 
 The result is byte-for-byte the same on every build host.
 
@@ -80,7 +82,7 @@ copyright = "(c) 2026 ACME"
 ```
 
 ```console
-pyxbuild build [--target win_amd64] [--python 3.12] [--zip] [--frozen | --offline]
+pyxbuild build [--target win_amd64|linux_x86_64|linux_aarch64] [--python 3.12] [--zip] [--frozen | --offline]
 pyxbuild lock                    # resolve only, (re)write pylock.win_amd64.toml
 pyxbuild doctor                  # missing wheels, missing DLLs, VC++ runtime, long paths
 pyxbuild sign dist/myapp-win_amd64 --cert cert.pfx --password-env PFX_PASSWORD
@@ -226,15 +228,18 @@ same layout. Only a folder on another Windows drive is kept as an absolute
 
 ## Limits
 
-* Every dependency needs a `win_amd64`, `abi3` or pure-Python wheel on the
-  index, or one of the fallbacks in [docs/NO_WHEEL.md](docs/NO_WHEEL.md)
+* Every dependency needs a wheel for the target (`win_amd64` or
+  `manylinux_*`, `abi3` included) or a pure-Python one on the index, or one of
+  the fallbacks in [docs/NO_WHEEL.md](docs/NO_WHEEL.md)
   (`pure-python`, Windows-CI wheels via `find-links`, experimental
   `cross-compile` with zig — 14 of 19 tested sdists build that way).
 * The project itself must be pure Python.
 * Some wheels need Visual C++ runtime DLLs that Windows does not ship
   (torch, ...). `pyxbuild doctor` lists them; add `msvc-runtime` to the
   dependencies to bundle them.
-* Only the `win_amd64` target exists so far.
+* Targets: `win_amd64`, `linux_x86_64`, `linux_aarch64` (glibc 2.28+). No
+  macOS yet; the Windows-only features are listed under
+  [Linux applications](#linux-applications).
 
 Documentation: [design](docs/DESIGN.md) · [testing](docs/TESTING.md) ·
 [compatibility matrix](docs/COMPATIBILITY.md) (38 packages × Python 3.11–3.14) ·
