@@ -141,7 +141,7 @@ jobs:
           out = pathlib.Path("out")
           lines = [f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(out).as_posix()}"
                    for p in sorted(out.rglob("*")) if p.is_file()]
-          (out / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+          (out / "SHA256SUMS").write_text("\n".join(lines) + "\n", newline="\n")
           print("\n".join(lines))
           PY
       - uses: actions/upload-artifact@v4
