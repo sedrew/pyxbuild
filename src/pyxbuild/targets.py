@@ -34,6 +34,36 @@ class Target:
     platform_system: str
     platform_machine: str
     exe_suffix: str
+    family: str = "windows"
+    """``windows`` or ``linux``: runtime layout, launcher format, file name rules."""
+    platform_tags: tuple[str, ...] = ()
+    """Wheel platform tags, most preferred first (default: ``(name,)``)."""
+
+    # --- runtime layout (python-build-standalone ``install_only``) -------------
+
+    @property
+    def is_windows(self) -> bool:
+        return self.family == "windows"
+
+    def stdlib_dir(self, python: str) -> str:
+        """Standard library, relative to the runtime (``python``: ``"3.12"``)."""
+        return "Lib" if self.is_windows else f"lib/python{python}"
+
+    def site_packages(self, python: str) -> str:
+        return f"{self.stdlib_dir(python)}/site-packages"
+
+    @property
+    def scripts_dir(self) -> str:
+        return "Scripts" if self.is_windows else "bin"
+
+    def interpreter(self, python: str, gui: bool = False) -> str:
+        """The interpreter, relative to the runtime, with ``/``."""
+        if self.is_windows:
+            return "pythonw.exe" if gui else "python.exe"
+        return f"bin/python{python}"
+
+    def launcher_name(self, script: str) -> str:
+        return f"{script}{self.exe_suffix}"
 
     def marker_environment(
         self, python_full_version: str, overrides: dict[str, str] | None = None
@@ -69,9 +99,10 @@ class Target:
         # explicit abis: otherwise packaging adds "t"/"d" ABIs when pyxbuild
         # itself runs on a free-threaded or debug interpreter
         abis = [interpreter, "abi3", "none"]
+        platforms = list(self.platform_tags or (self.name,))
         return [
-            *cpython_tags(py, abis=abis, platforms=[self.name]),
-            *compatible_tags(py, interpreter=interpreter, platforms=[self.name]),
+            *cpython_tags(py, abis=abis, platforms=platforms),
+            *compatible_tags(py, interpreter=interpreter, platforms=platforms),
         ]
 
     def evaluate(self, marker: str | Marker | None, env: dict[str, str]) -> bool:
@@ -92,7 +123,49 @@ WIN_AMD64 = Target(
     exe_suffix=".exe",
 )
 
-TARGETS = {t.name: t for t in (WIN_AMD64,)}
+# Linux: glibc 2.28 or newer (RHEL/Rocky 8, Debian 10, Ubuntu 20.04 and later);
+# python-build-standalone itself needs 2.17. Wheels for any older manylinux
+# baseline run there too.
+GLIBC_MINOR = 28
+
+
+def _manylinux(arch: str) -> tuple[str, ...]:
+    tags = []
+    for minor in range(GLIBC_MINOR, 4, -1):
+        tags.append(f"manylinux_2_{minor}_{arch}")
+        legacy = {17: "manylinux2014", 12: "manylinux2010", 5: "manylinux1"}.get(minor)
+        if legacy:
+            tags.append(f"{legacy}_{arch}")
+    return tuple(tags)
+
+
+LINUX_X86_64 = Target(
+    name="linux_x86_64",
+    uv_platform=f"x86_64-manylinux_2_{GLIBC_MINOR}",
+    pbs_triple="x86_64-unknown-linux-gnu",
+    os_name="posix",
+    sys_platform="linux",
+    platform_system="Linux",
+    platform_machine="x86_64",
+    exe_suffix="",
+    family="linux",
+    platform_tags=_manylinux("x86_64"),
+)
+
+LINUX_AARCH64 = Target(
+    name="linux_aarch64",
+    uv_platform=f"aarch64-manylinux_2_{GLIBC_MINOR}",
+    pbs_triple="aarch64-unknown-linux-gnu",
+    os_name="posix",
+    sys_platform="linux",
+    platform_system="Linux",
+    platform_machine="aarch64",
+    exe_suffix="",
+    family="linux",
+    platform_tags=_manylinux("aarch64"),
+)
+
+TARGETS = {t.name: t for t in (WIN_AMD64, LINUX_X86_64, LINUX_AARCH64)}
 
 
 def get_target(name: str) -> Target:
@@ -122,4 +195,6 @@ def markers_from_build_details(path: Path) -> dict[str, str]:
     platform = data.get("platform")
     if platform == "win-amd64":
         out.update(sys_platform="win32", os_name="nt", platform_machine="AMD64")
+    elif isinstance(platform, str) and platform.startswith("linux-"):
+        out.update(sys_platform="linux", os_name="posix", platform_machine=platform[6:])
     return out

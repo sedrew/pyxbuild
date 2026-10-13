@@ -28,8 +28,11 @@ DEFAULT_FLAGS = "-I"
 
 
 def stub_bytes(target: str, gui: bool, onefile: bool = False) -> bytes:
-    kind = ("onefile-" if onefile else "") + ("gui" if gui else "console")
-    name = f"launcher-{kind}-{target}.exe"
+    if target.startswith("linux_"):  # ELF (stub/launcher_posix.c): no GUI subsystem
+        name = f"launcher-{'onefile-' if onefile else ''}console-{target}"
+    else:
+        kind = ("onefile-" if onefile else "") + ("gui" if gui else "console")
+        name = f"launcher-{kind}-{target}.exe"
     ref = resources.files("pyxbuild").joinpath("_stubs", name)
     try:
         return ref.read_bytes()
@@ -98,13 +101,16 @@ def boot_code(entry: EntryPoint) -> str:
 def build_launcher(entry: EntryPoint, target: str, *, python_rel: str,
                    utf8_mode: bool = False,
                    resources: dict[int, dict[int, bytes]] | None = None,
-                   boot: bool = False) -> bytes:
+                   boot: bool = False, interpreter: str | None = None) -> bytes:
     """Stub (+ optional PE resources) + manifest for one entry point.
 
     ``boot``: start through ``_pyxbuild_boot`` (needs runtime/pyxbuild.json);
     dependency console scripts use the self-contained one-line bootstrap.
+    ``interpreter``: path relative to the launcher (default: Windows'
+    ``<python_rel>\\python.exe``/``pythonw.exe``).
     """
-    interpreter = python_rel + ("\\pythonw.exe" if entry.gui else "\\python.exe")
+    if interpreter is None:
+        interpreter = python_rel + ("\\pythonw.exe" if entry.gui else "\\python.exe")
     fields = {
         "python": interpreter,
         "flags": DEFAULT_FLAGS + (" -X utf8" if utf8_mode else ""),
@@ -122,7 +128,8 @@ def build_launcher(entry: EntryPoint, target: str, *, python_rel: str,
 def write_onefile(dest, entry: EntryPoint, target: str, archive, *, app: str,
                   extract: str = "cache", utf8_mode: bool = False, progress: str = "modern",
                   title: str | None = None,
-                  resources: dict[int, dict[int, bytes]] | None = None) -> None:
+                  resources: dict[int, dict[int, bytes]] | None = None,
+                  interpreter: str | None = None) -> None:
     """Write a onefile launcher: stub (+ resources) + archive + manifest.
 
     ``archive`` is an :class:`pyxbuild.onefile.ArchiveInfo`. The launcher
@@ -140,8 +147,11 @@ def write_onefile(dest, entry: EntryPoint, target: str, archive, *, app: str,
         from .resources import add_resources
 
         stub = add_resources(stub, resources)
+    windows = not target.startswith("linux_")
+    if interpreter is None:
+        interpreter = "runtime" + ("\\pythonw.exe" if entry.gui else "\\python.exe")
     fields = {
-        "python": "runtime" + ("\\pythonw.exe" if entry.gui else "\\python.exe"),
+        "python": interpreter,
         "flags": DEFAULT_FLAGS + (" -X utf8" if utf8_mode else ""),
         "code": boot_code(entry),
         "entry-point": f"{entry.module}:{entry.attr}",
@@ -151,9 +161,9 @@ def write_onefile(dest, entry: EntryPoint, target: str, archive, *, app: str,
         "archive-size": str(archive.size),
         "extract": extract,
     }
-    if entry.gui and progress != "modern":
+    if entry.gui and windows and progress != "modern":
         fields["progress"] = progress
-    if entry.gui and progress == "modern" and title:
+    if entry.gui and windows and progress == "modern" and title:
         fields["title"] = " ".join(title.split())  # shown in the first-start window
     with open(dest, "wb") as out:
         out.write(stub)

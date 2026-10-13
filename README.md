@@ -1,7 +1,8 @@
 # pyxbuild
 
 Build a Windows x64 application from a standard Python project — on macOS,
-Linux or Windows. No compiler, no Wine, no virtual machine.
+Linux or Windows. No compiler, no Wine, no virtual machine. Linux x86_64 and
+aarch64 applications are built the same way, from any of the three.
 
 ```console
 $ pyxbuild build
@@ -54,7 +55,7 @@ dependencies = ["requests>=2.32", "PySide6"]
 myapp = "myapp.main:run"
 
 [tool.pyxbuild]            # everything is optional
-targets = ["win_amd64"]
+targets = ["win_amd64"]   # also "linux_x86_64", "linux_aarch64"
 python = "3.12"            # default: newest supported allowed by requires-python
 mode = "folder"            # or "onefile": a single .exe (see below)
 lock = "pylock.toml"       # default: pylock.win_amd64.toml
@@ -87,6 +88,30 @@ pyxbuild sign dist/myapp-win_amd64 --cert cert.pfx --password-env PFX_PASSWORD
 
 Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
 `--offline` builds from the download cache only.
+
+### Linux applications
+
+`--target linux_x86_64` / `--target linux_aarch64` (or `targets = [...]`)
+build the same project for Linux, from macOS, Linux or Windows:
+
+```
+dist/myapp-linux_x86_64/
+├── myapp              ← launcher (static ELF, one per entry point)
+└── runtime/           ← CPython for Linux + your wheels in lib/python3.X/site-packages
+```
+
+* Runs on glibc 2.28 or newer (RHEL/Rocky 8, Debian 10, Ubuntu 20.04 and later);
+  wheels are chosen from `manylinux_2_28` down to `manylinux1`.
+* `zip = true` writes a `.tar.gz` (it keeps executable bits); `mode = "onefile"`
+  gives one executable that extracts once to `~/.cache/pyx/<app>/<hash>`
+  (`$PYX_ONEFILE_DIR`, `$XDG_CACHE_HOME` respected; `onefile-extract = "temp"`
+  uses `$TMPDIR` and cleans up). Concurrent first starts extract once, and old
+  versions are removed unless a copy is still running.
+* Console scripts of dependencies (`runtime/bin/*`) are relocatable shell/Python
+  scripts, so the folder can be moved anywhere.
+* Not (yet) for Linux: the Windows-specific options (icon, version info, GUI
+  log and message box, `truststore` store, patch executables, signing) and the
+  DLL check; `{data_dir}` is `~/<app>` for now.
 
 ### In the browser
 

@@ -53,6 +53,30 @@ SLIM_PRESETS: dict[str, list[str]] = {
     "sqlite": ["Lib/sqlite3/", "DLLs/_sqlite3.pyd", "DLLs/sqlite3.dll"],
 }
 DEFAULT_SLIM = ("tests", "idle", "ensurepip", "turtledemo", "lib2to3")
+# The same presets for POSIX runtimes: {stdlib} is lib/python3.X, extension
+# modules live in {stdlib}/lib-dynload, shared libraries in lib/.
+SLIM_PRESETS_POSIX: dict[str, list[str]] = {
+    "tests": ["{stdlib}/lib-dynload/_test*.so", "{stdlib}/lib-dynload/_ctypes_test*.so",
+              "{stdlib}/lib-dynload/xxlimited*.so", "{stdlib}/lib-dynload/xxsubtype*.so",
+              "{stdlib}/test/", "{stdlib}/idlelib/idle_test/", "{stdlib}/tkinter/test/"],
+    "idle": ["{stdlib}/idlelib/"],
+    "ensurepip": ["{stdlib}/ensurepip/"],
+    "turtledemo": ["{stdlib}/turtledemo/"],
+    "lib2to3": ["{stdlib}/lib2to3/"],
+    "pydoc": ["{stdlib}/pydoc_data/"],
+    "venv": ["{stdlib}/venv/"],
+    "tk": ["{stdlib}/tkinter/", "{stdlib}/turtle.py", "{stdlib}/idlelib/",
+           "{stdlib}/turtledemo/", "{stdlib}/lib-dynload/_tkinter*.so", "lib/libtcl*",
+           "lib/libtk*", "lib/tcl*/", "lib/tk*/", "lib/itcl*/", "lib/thread*/"],
+    "sqlite": ["{stdlib}/sqlite3/", "{stdlib}/lib-dynload/_sqlite3*.so"],
+}
+
+
+def slim_patterns(target: Target, python: str, name: str) -> list[str]:
+    if target.is_windows:
+        return SLIM_PRESETS[name]
+    stdlib = target.stdlib_dir(python)
+    return [p.replace("{stdlib}", stdlib) for p in SLIM_PRESETS_POSIX[name]]
 # Runtime parts that only matter for compiling extensions.
 RUNTIME_SKIP = ("include", "libs")
 DEFAULT_EPOCH = 315532800  # 1980-01-01, the earliest time a zip file can store
@@ -130,7 +154,7 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
         raise PyxbuildError(
             f"the project wheel {wheel.path.name} is platform-specific",
             hint="pyxbuild cannot cross-compile extension modules; build that part as a "
-                 "separate package with win_amd64 wheels (e.g. with cibuildwheel)",
+                 f"separate package with {target.name} wheels (e.g. with cibuildwheel)",
         )
 
     local = resolve_local(
@@ -190,7 +214,7 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
             if not built.is_pure:
                 raise PyxbuildError(
                     f"the local package {built.path.name} is platform-specific",
-                    hint="build it for win_amd64 elsewhere and add it through find-links")
+                    hint=f"build it for {target.name} elsewhere and add it through find-links")
             tb.wheels.append(built.path)
             continue
         path = fetch(_absolute_url(sel.file.url, lock_base or lock_path.parent),
@@ -205,7 +229,8 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
                     f"{sel.package.name}: building without its C extension still produced "
                     f"{built.path.name}", hint="the project's build switch may have changed")
             path = built.path
-        elif not sel.is_wheel and cfg.may_cross_compile(sel.package.name):
+        elif not sel.is_wheel and cfg.may_cross_compile(sel.package.name) \
+                and target.is_windows:
             from .crossbuild import cross_build_wheel
 
             _log(opts, f"[{target.name}] cross-compiling {sel.file.name} with zig (experimental)")
@@ -216,7 +241,7 @@ def prepare(cfg: ProjectConfig, target: Target, opts: BuildOptions, work: Path,
                 raise PyxbuildError(
                     f"{sel.package.name}: the sdist builds a platform-specific wheel on this "
                     f"host, which cannot run on {target.name}",
-                    hint="pin a version with a win_amd64 wheel, or try "
+                    hint=f"pin a version with a {target.name} wheel, or try "
                          f"cross-compile = [\"{sel.package.name}\"] (experimental)",
                 )
             path = built.path
@@ -232,7 +257,8 @@ def _absolute_url(url: str, base: Path) -> str:
 
 
 def _copy_runtime(src: Path, dest: Path, slim: list[str] | None = None, *,
-                  keep_dev_files: bool = False) -> int:
+                  keep_dev_files: bool = False, target: Target | None = None,
+                  python: str = "") -> int:
     """Copy the runtime, leaving out what the bundle must not contain.
 
     Skipped: ``include/``, ``libs/``, ``__pycache__``, everything in
@@ -240,14 +266,18 @@ def _copy_runtime(src: Path, dest: Path, slim: list[str] | None = None, *,
     for 3.11, which could clash with locked packages: torch on 3.11), and the
     ``slim`` presets. Returns the number of bytes left out by ``slim``.
     """
-    excluder = Excluder([p for name in slim or [] for p in SLIM_PRESETS[name]])
-    site = src / "Lib" / "site-packages"
+    target = target or get_target("win_amd64")
+    excluder = Excluder([p for name in slim or [] for p in slim_patterns(target, python, name)])
+    site = src / target.site_packages(python) if not target.is_windows else (
+        src / "Lib" / "site-packages")
     skipped = 0
 
     def ignore(directory: str, names: list[str]) -> set[str]:
         nonlocal skipped
         d = Path(directory)
-        if d == src:
+        if not target.is_windows and not keep_dev_files and d in posix_skip:
+            out = {n for n in names if posix_skip[d](n)}
+        elif d == src:
             out = set() if keep_dev_files else {n for n in names if n.lower() in RUNTIME_SKIP}
         elif d == site:
             out = {n for n in names if n != "README.txt"}
@@ -268,11 +298,22 @@ def _copy_runtime(src: Path, dest: Path, slim: list[str] | None = None, *,
                                 if full.is_dir() else full.stat().st_size)
         return out
 
+    # POSIX runtimes: only the interpreter binary from bin/ (the rest are
+    # symlinks and pip/idle scripts), no libpython*.so (the interpreter is
+    # static; the .so only serves embedding), headers or pkg-config files, and
+    # no share/ (man pages; a terminfo copy whose names differ only by case,
+    # which case-insensitive build hosts would merge; curses falls back to the
+    # system's terminfo)
+    posix_skip = {
+        src: lambda n: n in ("include", "share"),
+        src / "bin": lambda n: n != f"python{python}",
+        src / "lib": lambda n: n == "pkgconfig" or n.startswith("libpython"),
+    }
     shutil.copytree(src, dest, ignore=ignore)
     return skipped
 
 
-def compile_bytecode(runtime_dir: Path, python: str) -> None:
+def compile_bytecode(runtime_dir: Path, python: str, stdlib: str = "Lib") -> None:
     """Write __pycache__/*.pyc for the whole runtime with a host CPython ``python``.
 
     ``.pyc`` files depend only on the X.Y version, not on the OS. The
@@ -290,7 +331,7 @@ def compile_bytecode(runtime_dir: Path, python: str) -> None:
         "root=sys.argv[1]\n"
         "mode=py_compile.PycInvalidationMode.UNCHECKED_HASH\n"
         "bad=0\n"
-        "for d,ds,fs in os.walk(os.path.join(root,'Lib')):\n"
+        "for d,ds,fs in os.walk(os.path.join(root,sys.argv[2])):\n"
         "    ds.sort()\n"
         "    for f in sorted(fs):\n"
         "        if not f.endswith('.py'): continue\n"
@@ -311,7 +352,7 @@ def compile_bytecode(runtime_dir: Path, python: str) -> None:
         import io
 
         old_argv = sys.argv
-        sys.argv = ["-c", str(runtime_dir)]
+        sys.argv = ["-c", str(runtime_dir), stdlib]
         try:
             with contextlib.redirect_stdout(io.StringIO()):
                 exec(compile(driver, "<pyxbuild-bytecode>", "exec"), {"__name__": "__main__"})
@@ -319,7 +360,7 @@ def compile_bytecode(runtime_dir: Path, python: str) -> None:
             sys.argv = old_argv
         return
     cmd = [uv_executable(), "run", "--no-project", "--no-config", "--python", python, "--",
-           "python", "-I", "-c", driver, str(runtime_dir)]
+           "python", "-I", "-c", driver, str(runtime_dir), stdlib]
     env = {**os.environ, "UV_NO_PROGRESS": "1", "PYTHONHASHSEED": "0"}
     proc = subprocess.run(cmd, capture_output=True, text=True, env=env)
     # files with syntax errors (test data) simply stay without bytecode
@@ -327,12 +368,53 @@ def compile_bytecode(runtime_dir: Path, python: str) -> None:
         raise PyxbuildError(f"compiling bytecode failed:\n{proc.stderr.strip()}")
 
 
-def _normalize_tree(root: Path, epoch: int) -> None:
+def _normalize_tree(root: Path, epoch: int, *, windows: bool = True) -> None:
     for path in sorted(root.rglob("*"), key=lambda p: -len(p.parts)):
         if path.is_file():
-            path.chmod(0o755 if path.suffix.lower() in (".exe", ".dll", ".pyd") else 0o644)
+            if windows:
+                executable = path.suffix.lower() in (".exe", ".dll", ".pyd")
+            else:  # by content, so that every build host gives the same modes
+                executable = posix_executable(path)
+            path.chmod(0o755 if executable else 0o644)
         os.utime(path, (epoch, epoch))
     os.utime(root, (epoch, epoch))
+
+
+def posix_executable(path: Path) -> bool:
+    """ELF images and scripts: the onefile launcher uses the same rule."""
+    with open(path, "rb") as f:
+        head = f.read(4)
+    return head == b"\x7fELF" or head[:2] == b"#!"
+
+
+def write_tarball(app_dir: Path, tar_path: Path, epoch: int) -> None:
+    """Deterministic .tar.gz (POSIX targets keep executable bits): sorted
+    entries, fixed owner and timestamps, no gzip name or time."""
+    import gzip
+    import tarfile
+
+    tmp = tar_path.with_name(tar_path.name + ".partial")
+    with open(tmp, "wb") as raw, \
+            gzip.GzipFile(filename="", mode="wb", fileobj=raw, mtime=0, compresslevel=9) as gz, \
+            tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tf:
+        for path in [app_dir, *sorted(app_dir.rglob("*"),
+                                      key=lambda p: p.relative_to(app_dir).as_posix())]:
+            rel = app_dir.name if path == app_dir else \
+                f"{app_dir.name}/{path.relative_to(app_dir).as_posix()}"
+            info = tarfile.TarInfo(rel)
+            info.mtime = max(epoch, 0)
+            info.uid = info.gid = 0
+            info.uname = info.gname = ""
+            if path.is_dir():
+                info.type = tarfile.DIRTYPE
+                info.mode = 0o755
+                tf.addfile(info)
+            else:
+                info.mode = 0o755 if posix_executable(path) else 0o644
+                info.size = path.stat().st_size
+                with open(path, "rb") as f:
+                    tf.addfile(info, f)
+    os.replace(tmp, tar_path)
 
 
 def write_zip(app_dir: Path, zip_path: Path, epoch: int) -> None:
@@ -359,46 +441,55 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
              *, launchers: bool = True) -> tuple[list[Path], doctor.Report]:
     """Lay out the application folder in ``app_dir`` (which must not exist)."""
     runtime_dir = app_dir / RUNTIME_DIR
+    target = tb.target
     saved = _copy_runtime(tb.runtime.path, runtime_dir, cfg.slim,
-                          keep_dev_files=cfg.keep_dev_files)
+                          keep_dev_files=cfg.keep_dev_files, target=target, python=tb.python)
     if saved:
         _log(opts, f"[{tb.target.name}] slim: removed {saved / 2**20:.1f} MB of the "
              f"standard library ({', '.join(cfg.slim)})")
     _log(opts, f"[{tb.target.name}] installing "
          f"{len(tb.wheels) + len(tb.local_wheels) + 1} wheel(s)")
-    state = InstallState(runtime_dir, Excluder(cfg.exclude))
+    state = InstallState(runtime_dir, Excluder(cfg.exclude), target, tb.python)
     for wheel in sorted(tb.wheels, key=lambda p: p.name.lower()):
         install_wheel(wheel, runtime_dir, state)
     for wheel in tb.local_wheels:
         install_wheel(wheel, runtime_dir, state)
     install_wheel(tb.project_wheel.path, runtime_dir, state)
-    site_packages = runtime_dir / "Lib" / "site-packages"
+    site_packages = runtime_dir / target.site_packages(tb.python)
     # excluded files are skipped while installing; this catches anything left
     removed = state.excluded + apply_excludes(site_packages, Excluder(cfg.exclude))
     if removed:
         _log(opts, f"[{tb.target.name}] excluded {len(removed)} file(s)")
     boot = resources_files("pyxbuild").joinpath("_boot")
     for module in ("_pyxbuild_boot.py", "_pyxbuild_streams.py"):
-        (runtime_dir / "Lib" / module).write_bytes(boot.joinpath(module).read_bytes())
+        (runtime_dir / target.stdlib_dir(tb.python) / module).write_bytes(
+            boot.joinpath(module).read_bytes())
     # imported by site at the start of every interpreter of the bundle,
     # child processes included (see _pyxbuild_streams.py)
     (site_packages / "_pyxbuild_streams.pth").write_bytes(b"import _pyxbuild_streams\n")
     if cfg.bytecode:
         _log(opts, f"[{tb.target.name}] compiling bytecode with host Python {tb.python}")
-        compile_bytecode(runtime_dir, tb.python)
+        compile_bytecode(runtime_dir, tb.python, target.stdlib_dir(tb.python))
 
     created: list[Path] = []
     if launchers:
         for entry in cfg.entry_points:
-            exe = app_dir / f"{entry.name}{tb.target.exe_suffix}"
-            res = launcher_resources(
-                script=entry.name, project_name=tb.project_wheel.name,
-                version=tb.project_wheel.version, description=tb.project_wheel.summary,
-                version_info_cfg=cfg.version_info, icon=cfg.icon,
-            )
-            exe.write_bytes(build_launcher(entry, tb.target.name, python_rel=RUNTIME_DIR,
-                                           utf8_mode=cfg.utf8_mode, resources=res,
-                                           boot=True))
+            exe = app_dir / target.launcher_name(entry.name)
+            if target.is_windows:
+                res = launcher_resources(
+                    script=entry.name, project_name=tb.project_wheel.name,
+                    version=tb.project_wheel.version, description=tb.project_wheel.summary,
+                    version_info_cfg=cfg.version_info, icon=cfg.icon,
+                )
+                exe.write_bytes(build_launcher(entry, target.name, python_rel=RUNTIME_DIR,
+                                               utf8_mode=cfg.utf8_mode, resources=res,
+                                               boot=True))
+            else:
+                exe.write_bytes(build_launcher(
+                    entry, target.name, python_rel=RUNTIME_DIR, utf8_mode=cfg.utf8_mode,
+                    boot=True,
+                    interpreter=f"{RUNTIME_DIR}/{target.interpreter(tb.python, entry.gui)}"))
+                exe.chmod(0o755)
             created.append(exe)
 
     info = {
@@ -416,7 +507,11 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     # byte-identical builds across hosts
     (runtime_dir / "pyxbuild.json").write_text(json.dumps(info, indent=2) + "\n",
                                                 encoding="utf-8", newline="\n")
-    _normalize_tree(app_dir, source_date_epoch())
+    _normalize_tree(app_dir, source_date_epoch(), windows=target.is_windows)
+    if not target.is_windows:  # the DLL and import checks know Windows only
+        report = doctor.Report()
+        state.add_findings(report)
+        return created, report
     report = doctor.check_bundle(app_dir, runtime_dir)
     state.add_findings(report)
     check_imports(runtime_dir, tb.project_wheel.path, report)
@@ -474,9 +569,13 @@ def _build(cfg: ProjectConfig, opts: BuildOptions) -> list[BuildResult]:
             os.replace(staging, app_dir)
         launchers = [app_dir / p.name for p in launchers]
         zip_path = None
-        if make_zip:
+        if make_zip and target.is_windows:
             zip_path = dist / f"{cfg.normalized_name}-{tb.project_wheel.version}-{target.name}.zip"
             write_zip(app_dir, zip_path, source_date_epoch())
+        elif make_zip:  # .tar.gz keeps executable bits
+            zip_path = (dist / f"{cfg.normalized_name}-{tb.project_wheel.version}-"
+                        f"{target.name}.tar.gz")
+            write_tarball(app_dir, zip_path, source_date_epoch())
         _log(opts, f"[{target.name}] built {app_dir}")
         results.append(BuildResult(target.name, tb.runtime.spec.version, app_dir, launchers,
                                    zip_path, report))
@@ -497,17 +596,23 @@ def _write_onefile(cfg: ProjectConfig, tb: TargetBuild, staging: Path, work: Pat
              "executables carries the whole application; they share one extracted copy")
     exes = []
     for entry in cfg.entry_points:
+        target = tb.target
         res = launcher_resources(
             script=entry.name, project_name=tb.project_wheel.name,
             version=tb.project_wheel.version, description=tb.project_wheel.summary,
             version_info_cfg=cfg.version_info, icon=cfg.icon,
-        )
-        exe = dist / f"{entry.name}{tb.target.exe_suffix}"
+        ) if target.is_windows else None
+        interpreter = None if target.is_windows else \
+            f"{RUNTIME_DIR}/{target.interpreter(tb.python, entry.gui)}"
+        exe = dist / target.launcher_name(entry.name)
         partial = exe.with_name(exe.name + ".partial")
-        write_onefile(partial, entry, tb.target.name, archive, app=cfg.normalized_name,
+        write_onefile(partial, entry, target.name, archive, app=cfg.normalized_name,
                       extract=cfg.onefile_extract, utf8_mode=cfg.utf8_mode,
                       progress=cfg.onefile_progress,
-                      title=cfg.version_info.get("product-name") or cfg.name, resources=res)
+                      title=cfg.version_info.get("product-name") or cfg.name, resources=res,
+                      interpreter=interpreter)
+        if not target.is_windows:
+            partial.chmod(0o755)
         os.replace(partial, exe)
         exes.append(exe)
     _log(opts, f"[{tb.target.name}] {archive.files} files, "

@@ -40,6 +40,16 @@ Known Wine quirks: Python fails to initialise stdio when stdout/stderr are
 redirected to a regular file (use pipes); there is no display, so the golden
 tests skip `Tk()` windows and run Qt with `QT_QPA_PLATFORM=offscreen`.
 
+## Linux targets
+
+`tests/test_linux.py`: layout, tags, launchers, install rules and tarballs
+(any host), plus end-to-end builds that run natively on a Linux host of the
+same architecture (relocation, onefile with four concurrent first starts,
+the sweep that keeps a running version, temp mode). CI: `linux-build` builds
+both architectures on Ubuntu, macOS and Windows, `linux-reproducible` requires
+identical files from all three, `linux-run` starts them on x86_64 and arm64
+runners with an empty environment, `linux-e2e` runs the tests on both.
+
 ## Browser sandbox
 
 ```bash

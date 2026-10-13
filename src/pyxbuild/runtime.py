@@ -31,7 +31,7 @@ class RuntimeSpec:
 class Runtime:
     spec: RuntimeSpec
     path: Path
-    """Directory containing ``python.exe``."""
+    """The runtime's root (``python.exe`` on Windows, ``bin/python3.X`` elsewhere)."""
 
     def marker_overrides(self) -> dict[str, str]:
         for candidate in sorted(self.path.glob("**/build-details.json")):
@@ -86,15 +86,16 @@ def get_runtime(target: Target, python: str, *, quiet: bool = False) -> Runtime:
     spec = runtime_spec(target, python)
     root = cache_dir() / "runtimes" / spec.sha256
     python_dir = root / "python"
-    if not (python_dir / f"python{target.exe_suffix}").is_file():
+    interpreter = target.interpreter(python)
+    if not (python_dir / interpreter).is_file():
         archive = fetch(spec.url, spec.sha256, spec.file, quiet=quiet)
         root.parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(tempfile.mkdtemp(dir=root.parent, prefix=".extract-"))
         try:
             _safe_extract(archive, tmp)
-            if not (tmp / "python" / f"python{target.exe_suffix}").is_file():
-                raise PyxbuildError(f"{spec.file} does not contain python/python.exe")
-            if (python_dir / f"python{target.exe_suffix}").is_file():
+            if not (tmp / "python" / interpreter).is_file():
+                raise PyxbuildError(f"{spec.file} does not contain python/{interpreter}")
+            if (python_dir / interpreter).is_file():
                 pass  # another build finished first; never delete a runtime in use
             else:
                 if root.exists():
@@ -102,7 +103,7 @@ def get_runtime(target: Target, python: str, *, quiet: bool = False) -> Runtime:
                 try:
                     os.replace(tmp, root)
                 except OSError:
-                    if not (python_dir / f"python{target.exe_suffix}").is_file():
+                    if not (python_dir / interpreter).is_file():
                         raise
         finally:
             if tmp.exists():

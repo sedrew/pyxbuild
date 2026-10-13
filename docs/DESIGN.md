@@ -170,6 +170,29 @@ executables run the newest installed version. Applying a patch removes no
 versions; the next extraction by a full executable sweeps as usual (an old
 executable whose folder was swept extracts itself again).
 
+## Targets and platforms
+
+`targets.py` describes each target: tags, marker environment and the runtime
+layout (`stdlib_dir`, `site_packages`, `scripts_dir`, `interpreter`,
+`launcher_name`). Everything else asks the target instead of assuming
+Windows; for `win_amd64` the answers are the old constants, and the build
+output is byte-identical to the one before targets had a layout (checked
+against recorded hashes of the golden projects in folder, zip and onefile
+mode).
+
+| | `win_amd64` | `linux_x86_64`, `linux_aarch64` |
+|---|---|---|
+| runtime | `python.exe`, `Lib/site-packages`, `Scripts` | `bin/python3.X`, `lib/python3.X/site-packages`, `bin` |
+| left out of the runtime | `include/`, `libs/` | `include/`, `share/`, `lib/pkgconfig`, `libpython*.so` (the interpreter is static), everything in `bin/` but the interpreter |
+| wheel tags | `win_amd64` | `manylinux_2_28` ... `manylinux_2_5` (+ legacy aliases) |
+| launcher | PE stub without a C runtime (`stub/launcher.c`), child process in a job object | static musl ELF (`stub/launcher_posix.c`), `execv` |
+| dependency scripts | `.exe` launchers | relocatable `#!/bin/sh` / Python polyglot (`_boot/posix_script_head.txt`) |
+| file names | case-insensitive merge, reserved names refused | taken as they are |
+| file modes | n/a | 0755 for ELF files and `#!` scripts (by content, so every build host agrees), else 0644 |
+| archive | `.zip` | `.tar.gz` (sorted, uid/gid 0, fixed mtime, gzip without name/time) |
+| onefile cache | `%LOCALAPPDATA%\pyx`, named mutex, rename to trash | `~/.cache/pyx`, `flock` on `.<hash12>.lock`; running copies hold a shared `flock` on `<hash12>/.pyx-lock` (inherited through `exec`), so the sweep skips them |
+| checks | DLL imports, path lengths, import check | none yet |
+
 ## In the browser (Pyodide)
 
 `docs/assets/try/worker.js` loads Pyodide, extracts the pyxbuild wheel and

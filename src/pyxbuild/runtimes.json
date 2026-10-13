@@ -25,6 +25,50 @@
         "file": "cpython-3.14.6+20260718-x86_64-pc-windows-msvc-install_only_stripped.tar.gz",
         "sha256": "0c5c9f231704fb49149bc8f2b9d9dbe43eeaf6c54f362ef0fc2066ce64b4d10f"
       }
+    },
+    "linux_x86_64": {
+      "3.11": {
+        "version": "3.11.15",
+        "file": "cpython-3.11.15+20260718-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "23ccae6f1ff73e8aa8378436f869da003b8eb7d6c95f2bc706f494115ba1447d"
+      },
+      "3.12": {
+        "version": "3.12.13",
+        "file": "cpython-3.12.13+20260718-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "5854aa6ec71cad00334d5065633c210b2e7feb40956767a59a91791cadcf0b79"
+      },
+      "3.13": {
+        "version": "3.13.14",
+        "file": "cpython-3.13.14+20260718-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "571a710c62520b26dbadbd16e8850e24565c01dea94440223bc16caa21614021"
+      },
+      "3.14": {
+        "version": "3.14.6",
+        "file": "cpython-3.14.6+20260718-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "86bf107f65fc30b56f2b263b26797fcbb1661f5315910cdbf27f733eb8738b74"
+      }
+    },
+    "linux_aarch64": {
+      "3.11": {
+        "version": "3.11.15",
+        "file": "cpython-3.11.15+20260718-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "d42df045860a70cc94b2752e98874876190198f24f3e16f83f3ec5ad2d696d31"
+      },
+      "3.12": {
+        "version": "3.12.13",
+        "file": "cpython-3.12.13+20260718-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "f226576b91491ffa5739aa85726521e9031f4d87f80627d64ed348ac77cb31e9"
+      },
+      "3.13": {
+        "version": "3.13.14",
+        "file": "cpython-3.13.14+20260718-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "8d5ac68458a4df9bc3c349d607da2674d8390ad26162482b17215563e45aca83"
+      },
+      "3.14": {
+        "version": "3.14.6",
+        "file": "cpython-3.14.6+20260718-aarch64-unknown-linux-gnu-install_only_stripped.tar.gz",
+        "sha256": "c2a2caa03aa9beb77a5bbb5a009c8fe77b96a56925da2dba18095237e30faf04"
+      }
     }
   }
 }
