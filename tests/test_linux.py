@@ -80,11 +80,20 @@ def test_install_uses_posix_rules(tmp_path):
     install_wheel(_wheel(tmp_path / "Crypto-1.0-py3-none-any.whl",
                          {"Crypto/__init__.py": "A = 1\n", "Crypto/aux.py": ""},
                          {"crypto-tool": "Crypto:main"}), runtime, state)
-    install_wheel(_wheel(tmp_path / "crypto-1.0-py3-none-any.whl",
-                         {"crypto/__init__.py": "B = 1\n"}), runtime, state)
     site = runtime / "lib" / "python3.12" / "site-packages"
-    # case-sensitive: two packages; "aux" is an ordinary name on Linux
-    assert (site / "Crypto" / "aux.py").exists() and (site / "crypto" / "__init__.py").exists()
+    second = _wheel(tmp_path / "crypto-1.0-py3-none-any.whl", {"crypto/__init__.py": "B = 1\n"})
+    probe = tmp_path / "CaseProbe"
+    probe.write_text("")
+    if (tmp_path / "caseprobe").exists():  # macOS/Windows host: one folder for both
+        from pyxbuild.errors import PyxbuildError
+
+        with pytest.raises(PyxbuildError, match="differs only by case"):
+            install_wheel(second, runtime, state)
+    else:  # case-sensitive: two packages
+        install_wheel(second, runtime, state)
+        assert (site / "crypto" / "__init__.py").exists()
+    # "aux" is an ordinary name on Linux
+    assert (site / "Crypto" / "aux.py").exists()
     script = (runtime / "bin" / "crypto-tool").read_text()
     assert script.startswith("#!/bin/sh\n'''exec' ") and "/python3.12\"" in script
     assert "from Crypto import main" in script
@@ -239,3 +248,13 @@ def test_onefile_temp_mode_cleans_up(tmp_path, shared_cache, monkeypatch):
     assert r.returncode == 0 and "VERSION 1.0" in r.stdout and str(tmp) in r.stdout
     assert list(tmp.iterdir()) == []
 
+
+
+def test_case_clash_reports_the_on_disk_spelling(tmp_path):
+    from pyxbuild.install import _case_clash
+
+    (tmp_path / "lib" / "Crypto").mkdir(parents=True)
+    (tmp_path / "lib" / "Crypto" / "__init__.py").write_text("")
+    assert _case_clash(tmp_path, "lib/crypto/__init__.py") == "lib/Crypto/__init__.py"
+    assert _case_clash(tmp_path, "lib/Crypto/__init__.py") is None
+    assert _case_clash(tmp_path, "lib/other/x.py") is None

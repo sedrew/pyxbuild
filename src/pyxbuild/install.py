@@ -236,6 +236,15 @@ class _Destination(SchemeDictionaryDestination):
         rel = posixpath.normpath(posixpath.join(scheme_rel, "/".join(parts)))
         canonical = self.state.canonical(rel, self.wheel)
         dest = runtime / canonical
+        if not self.state.target.is_windows and dest.exists():
+            clash = _case_clash(runtime, canonical)
+            if clash:
+                raise PyxbuildError(
+                    f"{self.wheel}: {canonical!r} differs only by case from the installed "
+                    f"{clash!r}; this build host's file system ignores case, so the "
+                    f"{self.state.target.name} bundle cannot hold both",
+                    hint=f"build {self.state.target.name} on Linux (a case-sensitive file "
+                         "system), or keep only one of the two packages")
         if dest.exists():
             # Several wheels may ship the same file: the ``__init__.py`` of a
             # pkgutil-style namespace package (kivy_deps.sdl2/.glew/.angle,
@@ -298,6 +307,24 @@ class _Destination(SchemeDictionaryDestination):
                        if not (r.path in self.skipped and r.hash_ is None)]
         with construct_record_file(record_list, prefix_for_scheme) as stream:
             self.write_to_fs(scheme, record_file_path, stream, is_executable=False)
+
+
+def _case_clash(root: Path, rel: str) -> str | None:
+    """The on-disk spelling of ``rel`` if it differs from ``rel`` only by case
+    (a case-insensitive build host merged two names), else None."""
+    current = root
+    found = []
+    for part in rel.split("/"):
+        names = os.listdir(current)
+        if part not in names:
+            match = next((n for n in names if n.lower() == part.lower()), None)
+            if match is None:
+                return None
+            found.append(match)
+            return "/".join(found + rel.split("/")[len(found):])
+        found.append(part)
+        current = current / part
+    return None
 
 
 def _relocatable_script(stream, python: str):

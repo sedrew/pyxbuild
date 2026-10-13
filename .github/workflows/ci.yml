@@ -131,8 +131,9 @@ jobs:
         shell: bash
         run: |
           for t in linux_x86_64 linux_aarch64; do
-            python -m pyxbuild build tests/golden/hello --target $t --zip --out "out/$t"
-            python -m pyxbuild build tests/golden/hello --target $t --mode onefile --out "out/$t-onefile"
+            # --out is relative to the project, so pass an absolute path
+            python -m pyxbuild build tests/golden/hello --target $t --zip --out "$PWD/out/$t"
+            python -m pyxbuild build tests/golden/hello --target $t --mode onefile --out "$PWD/out/$t-onefile"
             rm -rf "out/$t/hello-$t"   # the folder is in the .tar.gz
           done
           python - <<'PY'
