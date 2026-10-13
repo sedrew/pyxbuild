@@ -79,6 +79,20 @@ Modules: `config.py`, `targets.py` (markers, tags), `runtime.py`, `lock.py`,
 * **Bytecode** is optional (`bytecode = true`): a host CPython of the same
   X.Y (provided by uv) writes unchecked-hash `.pyc` with `/`-separated
   embedded paths, so builds stay reproducible across hosts.
+  `bytecode-optimize` compiles with `optimize=1|2` but stores the result
+  under the plain `__pycache__` name, which a normal (non `-O`) interpreter
+  loads. `strip-sources` then moves the project's own `.pyc` next to its
+  package as `module.pyc` (sourceless import) and deletes the `.py`.
+* **include** runs after installation: matching project files are copied
+  to the application folder at their relative path; a pattern may not reach
+  `runtime/` or a launcher name, and Windows targets reject reserved names.
+* **Default exclusions** while installing wheels: `*.dylib` (macOS binaries
+  shipped in some cross-platform wheels, e.g. Arcade's 59 MB ffmpeg), plus
+  the `slim` engine presets (`SLIM_SITE_PRESETS`).
+* **Data folder** at run time: `{localappdata}` is `%LOCALAPPDATA%` (Windows)
+  or `$XDG_DATA_HOME` / `~/.local/share`; `{data_dir}` is
+  `{localappdata}/<project name>`. A string `gui-log` is a template expanded
+  with those names and then `time.strftime`.
 * **No-wheel fallbacks** (`fallbacks.py`, `crossbuild.py`): see
   [NO_WHEEL.md](NO_WHEEL.md).
 * **Runtime pinning**: `src/pyxbuild/runtimes.json` lists one
@@ -169,6 +183,29 @@ start follows `.pyx-next` (up to 16 hops) to a complete folder, so older
 executables run the newest installed version. Applying a patch removes no
 versions; the next extraction by a full executable sweeps as usual (an old
 executable whose folder was swept extracts itself again).
+
+## Targets and platforms
+
+`targets.py` describes each target: tags, marker environment and the runtime
+layout (`stdlib_dir`, `site_packages`, `scripts_dir`, `interpreter`,
+`launcher_name`). Everything else asks the target instead of assuming
+Windows; for `win_amd64` the answers are the old constants, and the build
+output is byte-identical to the one before targets had a layout (checked
+against recorded hashes of the golden projects in folder, zip and onefile
+mode).
+
+| | `win_amd64` | `linux_x86_64`, `linux_aarch64` |
+|---|---|---|
+| runtime | `python.exe`, `Lib/site-packages`, `Scripts` | `bin/python3.X`, `lib/python3.X/site-packages`, `bin` |
+| left out of the runtime | `include/`, `libs/` | `include/`, `share/`, `lib/pkgconfig`, `libpython*.so` (the interpreter is static), everything in `bin/` but the interpreter |
+| wheel tags | `win_amd64` | `manylinux_2_28` ... `manylinux_2_5` (+ legacy aliases) |
+| launcher | PE stub without a C runtime (`stub/launcher.c`), child process in a job object | static musl ELF (`stub/launcher_posix.c`), `execv` |
+| dependency scripts | `.exe` launchers | relocatable `#!/bin/sh` / Python polyglot (`_boot/posix_script_head.txt`) |
+| file names | case-insensitive merge, reserved names refused | taken as they are |
+| file modes | n/a | 0755 for ELF files and `#!` scripts (by content, so every build host agrees), else 0644 |
+| archive | `.zip` | `.tar.gz` (sorted, uid/gid 0, fixed mtime, gzip without name/time) |
+| onefile cache | `%LOCALAPPDATA%\pyx`, named mutex, rename to trash | `~/.cache/pyx`, `flock` on `.<hash12>.lock`; running copies hold a shared `flock` on `<hash12>/.pyx-lock` (inherited through `exec`), so the sweep skips them |
+| checks | DLL imports, path lengths, import check | none yet |
 
 ## In the browser (Pyodide)
 

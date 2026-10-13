@@ -35,6 +35,7 @@ _KNOWN_KEYS = {
     "cross-compile", "pure-python", "extras", "scripts", "slim", "bytecode",
     "env", "clean-env", "app-id", "truststore", "gui-log", "dpi-aware", "keep-dev-files",
     "version-info", "utf8-mode", "onefile-extract", "onefile-progress",
+    "include", "strip-sources", "bytecode-optimize", "build-info",
 }
 
 
@@ -71,7 +72,8 @@ class ProjectConfig:
     mode: str = "folder"
     onefile_extract: str = "cache"  # "cache": once per version; "temp": every start
     onefile_progress: str = "modern"  # first-extraction window: "modern", "classic", "off"
-    icon: Path | None = None
+    icon: Path | list[Path] | None = None
+    """An .ico file, or PNG image(s) (one per size, up to 256x256) made into one."""
     lock: Path | None = None
     exclude: list[str] = field(default_factory=list)
     zip: bool = False
@@ -90,7 +92,9 @@ class ProjectConfig:
     clean_env: list[str] = field(default_factory=lambda: list(DEFAULT_CLEAN_ENV))
     app_id: str | None = None
     truststore: bool = False
-    gui_log: bool = True
+    gui_log: bool | str = True
+    """GUI apps' log: True (``{data_dir}/logs/<script>.log``), False, or a path
+    template with ``{data_dir}``-style names and strftime codes."""
     dpi_aware: bool = True
     keep_dev_files: bool = False
     """Keep the runtime's include/ and libs/ (compiling at run time: cffi, triton)."""
@@ -103,6 +107,14 @@ class ProjectConfig:
     extras: list[str] = field(default_factory=list)
     version_info: dict[str, str] = field(default_factory=dict)
     utf8_mode: bool = False
+    include: list[str] = field(default_factory=list)
+    """Project files to copy next to the application (gitignore-style patterns)."""
+    strip_sources: bool = False
+    """Ship the project's own modules as .pyc only (implies bytecode)."""
+    bytecode_optimize: int = 0
+    """0, 1 (no asserts) or 2 (no asserts, no docstrings) for the compiled .pyc."""
+    build_info: dict[str, str] = field(default_factory=dict)
+    """Stored in runtime/pyxbuild.json ("build-info"), readable by the app."""
 
     def boot_settings(self) -> dict:
         """Settings for runtime/Lib/_pyxbuild_boot.py, stored in pyxbuild.json."""
@@ -271,7 +283,10 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
         if cfg.onefile_progress not in ("modern", "classic", "off"):
             raise ConfigError('onefile-progress must be "modern", "classic" or "off"')
     if "icon" in tool:
-        cfg.icon = root / _str(tool["icon"], "icon")
+        if isinstance(tool["icon"], list):
+            cfg.icon = [root / v for v in _str_list(tool["icon"], "icon")]
+        else:
+            cfg.icon = root / _str(tool["icon"], "icon")
     if "lock" in tool:
         cfg.lock = root / _str(tool["lock"], "lock")
     if "exclude" in tool:
@@ -303,19 +318,24 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
         cfg.clean_env = _str_list(tool["clean-env"], "clean-env")
     if "app-id" in tool:
         cfg.app_id = _str(tool["app-id"], "app-id")
+    if isinstance(tool.get("gui-log"), str):
+        cfg.gui_log = tool["gui-log"]
     for key in ("truststore", "gui-log", "dpi-aware", "keep-dev-files"):
+        if key == "gui-log" and isinstance(tool.get(key), str):
+            continue
         if key in tool:
             if not isinstance(tool[key], bool):
                 raise ConfigError(f"[tool.pyxbuild] {key} must be true or false")
             setattr(cfg, key.replace("-", "_"), tool[key])
     if "slim" in tool:
-        from .builder import SLIM_PRESETS
+        from .builder import SLIM_PRESETS, SLIM_SITE_PRESETS
 
         cfg.slim = _str_list(tool["slim"], "slim")
-        unknown_slim = sorted(set(cfg.slim) - set(SLIM_PRESETS))
+        known = [*SLIM_PRESETS, *SLIM_SITE_PRESETS]
+        unknown_slim = sorted(set(cfg.slim) - set(known))
         if unknown_slim:
             raise ConfigError(f"unknown slim preset(s): {', '.join(unknown_slim)}",
-                              hint=f"known: {', '.join(SLIM_PRESETS)}")
+                              hint=f"known: {', '.join(known)}")
     if "bytecode" in tool:
         if not isinstance(tool["bytecode"], bool):
             raise ConfigError("[tool.pyxbuild] bytecode must be true or false")
@@ -350,6 +370,24 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
         if not isinstance(tool["utf8-mode"], bool):
             raise ConfigError("[tool.pyxbuild] utf8-mode must be true or false")
         cfg.utf8_mode = tool["utf8-mode"]
+    if "include" in tool:
+        cfg.include = _str_list(tool["include"], "include")
+    if "strip-sources" in tool:
+        if not isinstance(tool["strip-sources"], bool):
+            raise ConfigError("[tool.pyxbuild] strip-sources must be true or false")
+        cfg.strip_sources = tool["strip-sources"]
+        if cfg.strip_sources:
+            cfg.bytecode = True  # sourceless modules need their .pyc
+    if "bytecode-optimize" in tool:
+        level = tool["bytecode-optimize"]
+        if level not in (0, 1, 2) or isinstance(level, bool):
+            raise ConfigError("[tool.pyxbuild] bytecode-optimize must be 0, 1 or 2")
+        cfg.bytecode_optimize = level
+    if "build-info" in tool:
+        info = tool["build-info"]
+        if not isinstance(info, dict) or not all(isinstance(v, str) for v in info.values()):
+            raise ConfigError("[tool.pyxbuild.build-info] must be a table of strings")
+        cfg.build_info = dict(sorted(info.items()))
     if "version-info" in tool:
         vi = tool["version-info"]
         if not isinstance(vi, dict) or not all(isinstance(v, str) for v in vi.values()):

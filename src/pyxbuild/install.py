@@ -30,6 +30,31 @@ from .errors import PyxbuildError
 INSTALLER_NAME = b"pyxbuild"
 
 
+def scheme(target, runtime_dir: Path, dist_name: str, python: str) -> dict[str, str]:
+    """``sysconfig`` scheme of the target interpreter living in ``runtime_dir``."""
+    if target.is_windows:
+        return nt_scheme(runtime_dir, dist_name)
+    site = str(runtime_dir / target.site_packages(python))
+    return {
+        "purelib": site,
+        "platlib": site,
+        "headers": str(runtime_dir / "include" / f"python{python}" / dist_name),
+        "scripts": str(runtime_dir / "bin"),
+        "data": str(runtime_dir),
+    }
+
+
+POSIX_SCRIPT_HEAD = Path(__file__).with_name("_boot").joinpath("posix_script_head.txt")
+POSIX_SHEBANG_MARK = "pyxbuild-relocatable"
+
+
+def posix_script_head(python: str) -> str:
+    """Relocatable POSIX scripts (like ``uv venv --relocatable``): the shell runs
+    the first lines, Python sees a string; the interpreter is found next to the
+    script wherever the application folder is."""
+    return POSIX_SCRIPT_HEAD.read_text(encoding="utf-8").replace("{python}", python)
+
+
 def nt_scheme(runtime_dir: Path, dist_name: str) -> dict[str, str]:
     """``sysconfig`` ``nt`` scheme for an interpreter living in ``runtime_dir``."""
     return {
@@ -90,9 +115,16 @@ class InstallState:
 
     RUNTIME = "the Python runtime"
 
-    def __init__(self, runtime_dir: Path, excluder: Excluder | None = None) -> None:
+    def __init__(self, runtime_dir: Path, excluder: Excluder | None = None,
+                 target=None, python: str = "") -> None:
+        from .targets import WIN_AMD64
+
         self.runtime_dir = runtime_dir
         self.excluder = excluder
+        self.target = target or WIN_AMD64
+        self.python = python
+        # Windows: case-insensitive names; Linux: names are taken as they are
+        self._key = _win_key if self.target.is_windows else (lambda name: name)
         self.case_merges: list[CaseMerge] = []
         self.excluded: list[str] = []
         self._names: dict[str, dict[str, str]] = {}   # dir (canonical) -> key -> name
@@ -102,7 +134,7 @@ class InstallState:
         names = self._names.get(rel_dir)
         if names is None:
             d = self.runtime_dir / rel_dir if rel_dir else self.runtime_dir
-            names = {_win_key(n): n for n in sorted(os.listdir(d))} if d.is_dir() else {}
+            names = {self._key(n): n for n in sorted(os.listdir(d))} if d.is_dir() else {}
             self._names[rel_dir] = names
         return names
 
@@ -112,7 +144,7 @@ class InstallState:
         for part in rel.split("/"):
             parent = "/".join(out)
             names = self._listing(parent)
-            key = _win_key(part)
+            key = self._key(part)
             existing = names.get(key)
             if existing is None:
                 names[key] = existing = part
@@ -185,7 +217,7 @@ class _Destination(SchemeDictionaryDestination):
             return RecordEntry(path, None, None)
         # before touching the file system: on a Windows host "a:b" would be
         # taken as a drive or an NTFS stream
-        for part in parts:
+        for part in parts if self.state.target.is_windows else ():
             problem = windows_name_problem(part)
             if problem:
                 hint = (f'if the application does not need it, add "{path}" to '
@@ -204,6 +236,15 @@ class _Destination(SchemeDictionaryDestination):
         rel = posixpath.normpath(posixpath.join(scheme_rel, "/".join(parts)))
         canonical = self.state.canonical(rel, self.wheel)
         dest = runtime / canonical
+        if not self.state.target.is_windows and dest.exists():
+            clash = _case_clash(runtime, canonical)
+            if clash:
+                raise PyxbuildError(
+                    f"{self.wheel}: {canonical!r} differs only by case from the installed "
+                    f"{clash!r}; this build host's file system ignores case, so the "
+                    f"{self.state.target.name} bundle cannot hold both",
+                    hint=f"build {self.state.target.name} on Linux (a case-sensitive file "
+                         "system), or keep only one of the two packages")
         if dest.exists():
             # Several wheels may ship the same file: the ``__init__.py`` of a
             # pkgutil-style namespace package (kivy_deps.sdl2/.glew/.angle,
@@ -220,6 +261,8 @@ class _Destination(SchemeDictionaryDestination):
             hash_, size = copyfileobj_with_hashing(io.BytesIO(data), _NullWriter(),
                                                    self.hash_algorithm)
         else:
+            if scheme == "scripts" and not self.state.target.is_windows:
+                stream = _relocatable_script(stream, self.state.python)
             dest.parent.mkdir(parents=True, exist_ok=True)
             with open(dest, "wb") as f:
                 hash_, size = copyfileobj_with_hashing(stream, f, self.hash_algorithm)
@@ -242,6 +285,12 @@ class _Destination(SchemeDictionaryDestination):
             raise PyxbuildError(f"invalid console script name {name!r} in a wheel")
 
         entry = EntryPoint(name=name, module=module, attr=attr, gui=section == "gui")
+        if not self.state.target.is_windows:
+            body = (posix_script_head(self.state.python)
+                    + f"import sys\nfrom {module} import {attr.split('.')[0]}\n"
+                    + f"sys.exit({attr}())\n")
+            with io.BytesIO(body.encode()) as stream:
+                return self.write_to_fs(Scheme("scripts"), name, stream, is_executable=True)
         data = build_launcher(entry, self.target, python_rel="..")
         with io.BytesIO(data) as stream:
             return self.write_to_fs(Scheme("scripts"), f"{name}.exe", stream, is_executable=True)
@@ -260,19 +309,48 @@ class _Destination(SchemeDictionaryDestination):
             self.write_to_fs(scheme, record_file_path, stream, is_executable=False)
 
 
+def _case_clash(root: Path, rel: str) -> str | None:
+    """The on-disk spelling of ``rel`` if it differs from ``rel`` only by case
+    (a case-insensitive build host merged two names), else None."""
+    current = root
+    found = []
+    for part in rel.split("/"):
+        names = os.listdir(current)
+        if part not in names:
+            match = next((n for n in names if n.lower() == part.lower()), None)
+            if match is None:
+                return None
+            found.append(match)
+            return "/".join(found + rel.split("/")[len(found):])
+        found.append(part)
+        current = current / part
+    return None
+
+
+def _relocatable_script(stream, python: str):
+    """``#!python`` scripts of ``.data/scripts``: point them at the bundle's interpreter."""
+    data = stream.read()
+    first, _, rest = data.partition(b"\n")
+    if first.startswith(b"#!") and POSIX_SHEBANG_MARK.encode() in first:
+        data = posix_script_head(python).encode() + rest
+    return io.BytesIO(data)
+
+
 def install_wheel(wheel_path: Path, runtime_dir: Path,
                   state: InstallState | None = None) -> None:
     """Install one wheel; pass the same ``state`` for every wheel of an application."""
     from packaging.utils import parse_wheel_filename
 
     name = parse_wheel_filename(wheel_path.name)[0]
+    state = state if state is not None else InstallState(runtime_dir)
+    windows = state.target.is_windows
     destination = _Destination(
-        nt_scheme(runtime_dir, str(name)),
-        interpreter="python.exe",
-        script_kind="win-amd64",
+        scheme(state.target, runtime_dir, str(name), state.python),
+        interpreter="python.exe" if windows else POSIX_SHEBANG_MARK,
+        script_kind="win-amd64" if windows else "posix",
         bytecode_optimization_levels=(),
         wheel=wheel_path.name,
-        state=state if state is not None else InstallState(runtime_dir),
+        state=state,
     )
     try:
         with warnings.catch_warnings():

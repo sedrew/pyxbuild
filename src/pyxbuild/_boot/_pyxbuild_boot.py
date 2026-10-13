@@ -30,6 +30,15 @@ def _config():
         return json.load(f)
 
 
+def _user_data_home():
+    """Per-user data folder when LOCALAPPDATA is not set: the home folder on
+    Windows (as before), $XDG_DATA_HOME or ~/.local/share elsewhere."""
+    if os.name == "nt":
+        return os.path.expanduser("~")
+    xdg = os.environ.get("XDG_DATA_HOME", "")
+    return xdg if os.path.isabs(xdg) else os.path.expanduser("~/.local/share")
+
+
 def _expand(value, names):
     for key, path in names.items():
         value = value.replace("{" + key + "}", path)
@@ -124,7 +133,7 @@ def main(script):
     app_dir = os.path.dirname(os.path.abspath(sys.prefix))
     exe_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
     app_name = cfg.get("project", {}).get("name", script)
-    localappdata = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+    localappdata = os.environ.get("LOCALAPPDATA") or _user_data_home()
     names = {"app_dir": app_dir, "exe_dir": exe_dir, "localappdata": localappdata,
              "data_dir": os.path.join(localappdata, app_name)}
 
@@ -135,8 +144,13 @@ def main(script):
 
     if launcher.get("gui"):
         log_path = None
-        if boot.get("gui-log", True):
+        gui_log = boot.get("gui-log", True)
+        if gui_log is True:
             log_path = _gui_streams(os.path.join(names["data_dir"], "logs", script + ".log"))
+        elif gui_log:  # a template: {data_dir}-style names and strftime codes
+            import time
+
+            log_path = _gui_streams(os.path.normpath(time.strftime(_expand(gui_log, names))))
         _gui_excepthook(app_name, log_path)
         _gui_process(boot.get("app-id"), boot.get("dpi-aware", True))
 

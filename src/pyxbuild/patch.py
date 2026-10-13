@@ -103,6 +103,9 @@ def make_patch(base_exe: Path, target_exe: Path, out: Path, *,
     """
     base_m, base_files = _onefile(base_exe)
     target_m, target_files = _onefile(target_exe)
+    if "\\" not in base_m.get("python", "") or "\\" not in target_m.get("python", ""):
+        raise PyxbuildError("patch executables are made for Windows applications only "
+                            "(win_amd64)")
     if base_m["app"] != target_m["app"]:
         raise PyxbuildError(f"different applications: {base_m['app']!r} and "
                             f"{target_m['app']!r}")

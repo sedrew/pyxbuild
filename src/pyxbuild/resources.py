@@ -68,6 +68,29 @@ class IconImage:
     data: bytes
 
 
+def read_icon(icon: Path | list[Path]) -> list[IconImage]:
+    """Images of an .ico file, or of PNG files (each up to 256x256; ICO files
+    may hold PNG images since Windows Vista, so no conversion is needed)."""
+    paths = icon if isinstance(icon, list) else [icon]
+    if len(paths) == 1 and paths[0].suffix.lower() == ".ico":
+        return read_ico(paths[0])
+    images: list[IconImage] = []
+    for path in paths:
+        try:
+            raw = path.read_bytes()
+        except OSError as exc:
+            raise ConfigError(f"cannot read icon {path}: {exc}") from None
+        if raw[:8] != b"\x89PNG\r\n\x1a\n" or raw[12:16] != b"IHDR":
+            raise ConfigError(f"{path} is neither an .ico nor a PNG file")
+        w, h = struct.unpack(">II", raw[16:24])
+        if not (0 < w <= 256 and 0 < h <= 256):
+            raise ConfigError(f"{path} is {w}x{h}; icon images can be at most 256x256",
+                              hint="give several sizes, e.g. 16, 32, 48 and 256 pixels")
+        images.append(IconImage(w % 256, h % 256, 0, 1, 32, raw))  # 0 means 256
+    images.sort(key=lambda i: (i.width or 256))
+    return images
+
+
 def read_ico(path: Path) -> list[IconImage]:
     try:
         raw = path.read_bytes()
@@ -270,7 +293,7 @@ def launcher_resources(*, script: str, project_name: str, version: str,
         RT_MANIFEST: {1: APP_MANIFEST.encode("utf-8")},
     }
     if icon is not None:
-        images = read_ico(icon)
+        images = read_icon(icon)
         res[RT_ICON] = {i + 1: img.data for i, img in enumerate(images)}
         group = struct.pack("<HHH", 0, 1, len(images)) + b"".join(
             struct.pack("<BBBBHHIH", img.width, img.height, img.colors, 0, img.planes,

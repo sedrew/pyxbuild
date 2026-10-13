@@ -114,6 +114,93 @@ jobs:
           echo "$out"
           echo "$out" | grep -q "Built in the browser with pyxbuild"
 
+  linux-build:
+    name: build Linux apps on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - name: build hello for both Linux targets (folder .tar.gz and onefile)
+        shell: bash
+        run: |
+          for t in linux_x86_64 linux_aarch64; do
+            # --out is relative to the project, so pass an absolute path
+            python -m pyxbuild build tests/golden/hello --target $t --zip --out "$PWD/out/$t"
+            python -m pyxbuild build tests/golden/hello --target $t --mode onefile --out "$PWD/out/$t-onefile"
+            rm -rf "out/$t/hello-$t"   # the folder is in the .tar.gz
+          done
+          python - <<'PY'
+          import hashlib, pathlib
+          out = pathlib.Path("out")
+          lines = [f"{hashlib.sha256(p.read_bytes()).hexdigest()}  {p.relative_to(out).as_posix()}"
+                   for p in sorted(out.rglob("*")) if p.is_file()]
+          (out / "SHA256SUMS").write_text("\n".join(lines) + "\n", newline="\n")
+          print("\n".join(lines))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.os }}
+          path: out
+          retention-days: 7
+
+  linux-reproducible:
+    name: identical Linux apps on every build host
+    needs: linux-build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - run: |
+          diff artifacts/linux-ubuntu-latest/SHA256SUMS artifacts/linux-macos-14/SHA256SUMS
+          diff artifacts/linux-ubuntu-latest/SHA256SUMS artifacts/linux-windows-latest/SHA256SUMS
+
+  linux-run:
+    name: run Linux apps built on ${{ matrix.built-on }} (${{ matrix.runner }})
+    needs: linux-build
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        built-on: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-${{ matrix.built-on }}
+          path: app
+      - name: folder and onefile start without a system Python
+        run: |
+          t=linux_x86_64; [ "$(uname -m)" = aarch64 ] && t=linux_aarch64
+          tar xzf "app/$t/hello-1.0.0-$t.tar.gz"
+          env -i PATH=/usr/bin:/bin HOME="$HOME" "./hello-$t/hello" | tee out.txt
+          grep -q "requests" out.txt
+          chmod +x "app/$t-onefile/hello"   # artifacts do not keep modes
+          env -i PATH=/usr/bin:/bin HOME="$HOME" "app/$t-onefile/hello" | tee out2.txt
+          grep -q "requests" out2.txt
+
+  linux-e2e:
+    name: Linux end to end (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest tests/test_linux.py -ra
+
   build-golden:
     name: build golden apps on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -306,6 +393,7 @@ jobs:
   bench:
     name: benchmark vs PyInstaller (${{ matrix.project }}, windows-latest)
     runs-on: windows-latest
+    timeout-minutes: 30  # a run takes ~13 min; a hung PyInstaller run would hold the runner for 6 h
     continue-on-error: true
     strategy:
       fail-fast: false

@@ -31,7 +31,7 @@ class RuntimeSpec:
 class Runtime:
     spec: RuntimeSpec
     path: Path
-    """Directory containing ``python.exe``."""
+    """The runtime's root (``python.exe`` on Windows, ``bin/python3.X`` elsewhere)."""
 
     def marker_overrides(self) -> dict[str, str]:
         for candidate in sorted(self.path.glob("**/build-details.json")):
@@ -69,32 +69,42 @@ def runtime_spec(target: Target, python: str) -> RuntimeSpec:
     )
 
 
-def _safe_extract(archive: Path, dest: Path) -> None:
+def _wanted_posix(member: tarfile.TarInfo) -> bool:
+    """POSIX runtimes: no links and no share/. The bundle never uses them (the
+    builder copies only the interpreter from bin/ and skips share/), and on a
+    case-insensitive build host (macOS, Windows) share/terminfo's names that
+    differ only by case collide and its symlinks would point at themselves."""
+    return not (member.issym() or member.islnk() or member.name.startswith("python/share/"))
+
+
+def _safe_extract(archive: Path, dest: Path, *, posix: bool = False) -> None:
     with tarfile.open(archive, "r:gz") as tf:
+        members = [m for m in tf.getmembers() if _wanted_posix(m)] if posix else None
         if hasattr(tarfile, "data_filter"):
-            tf.extractall(dest, filter="data")
+            tf.extractall(dest, members=members, filter="data")
             return
         root = dest.resolve()
-        for member in tf.getmembers():  # Python < 3.11.4
+        for member in members if members is not None else tf.getmembers():  # Python < 3.11.4
             target = (dest / member.name).resolve()
             if not target.is_relative_to(root) or member.issym() or member.islnk():
                 raise PyxbuildError(f"unsafe member {member.name!r} in {archive.name}")
-        tf.extractall(dest)  # noqa: S202 - members validated above
+        tf.extractall(dest, members=members)  # noqa: S202 - members validated above
 
 
 def get_runtime(target: Target, python: str, *, quiet: bool = False) -> Runtime:
     spec = runtime_spec(target, python)
     root = cache_dir() / "runtimes" / spec.sha256
     python_dir = root / "python"
-    if not (python_dir / f"python{target.exe_suffix}").is_file():
+    interpreter = target.interpreter(python)
+    if not (python_dir / interpreter).is_file():
         archive = fetch(spec.url, spec.sha256, spec.file, quiet=quiet)
         root.parent.mkdir(parents=True, exist_ok=True)
         tmp = Path(tempfile.mkdtemp(dir=root.parent, prefix=".extract-"))
         try:
-            _safe_extract(archive, tmp)
-            if not (tmp / "python" / f"python{target.exe_suffix}").is_file():
-                raise PyxbuildError(f"{spec.file} does not contain python/python.exe")
-            if (python_dir / f"python{target.exe_suffix}").is_file():
+            _safe_extract(archive, tmp, posix=not target.is_windows)
+            if not (tmp / "python" / interpreter).is_file():
+                raise PyxbuildError(f"{spec.file} does not contain python/{interpreter}")
+            if (python_dir / interpreter).is_file():
                 pass  # another build finished first; never delete a runtime in use
             else:
                 if root.exists():
@@ -102,7 +112,7 @@ def get_runtime(target: Target, python: str, *, quiet: bool = False) -> Runtime:
                 try:
                     os.replace(tmp, root)
                 except OSError:
-                    if not (python_dir / f"python{target.exe_suffix}").is_file():
+                    if not (python_dir / interpreter).is_file():
                         raise
         finally:
             if tmp.exists():

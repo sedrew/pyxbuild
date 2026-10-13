@@ -1,4 +1,4 @@
-"""Build the Windows launcher stubs with ``zig cc``.
+"""Build the launcher stubs (Windows PE, Linux ELF) with ``zig cc``.
 
 Usage::
 
@@ -35,6 +35,15 @@ ZIG_VERSION = "0.16.0"
 TARGETS = {
     "win_amd64": "x86_64-windows-gnu",
 }
+# Linux: static musl executables (no glibc version requirement of their own)
+POSIX_SOURCE = ROOT / "stub" / "launcher_posix.c"
+POSIX_TARGETS = {
+    "linux_x86_64": "x86_64-linux-musl",
+    "linux_aarch64": "aarch64-linux-musl",
+}
+POSIX_VARIANTS = ("console", "onefile-console")
+POSIX_FLAGS = ["-Os", "-fno-ident", "-ffile-prefix-map={root}=.", "-Wall", "-static", "-s",
+               "-Wl,--build-id=none", "-I{root}/stub"]
 
 COMPILE_FLAGS = [
     "-Os",
@@ -112,6 +121,16 @@ def build(out_dir: Path) -> dict[str, str]:
             normalize_timestamp(out)
             for junk in out_dir.glob(out.stem + ".pdb"):
                 junk.unlink()
+            hashes[out.name] = hashlib.sha256(out.read_bytes()).hexdigest()
+    for platform, triple in POSIX_TARGETS.items():
+        for kind in POSIX_VARIANTS:
+            out = out_dir / f"launcher-{kind}-{platform}"
+            flags = [f.format(root=ROOT) for f in POSIX_FLAGS]
+            if kind.startswith("onefile"):
+                flags.append("-DPYX_ONEFILE")
+            subprocess.run([*zig, "cc", "-target", triple, *flags, "-o", str(out),
+                            os.path.relpath(POSIX_SOURCE, ROOT)], check=True, cwd=ROOT)
+            out.chmod(0o755)
             hashes[out.name] = hashlib.sha256(out.read_bytes()).hexdigest()
     return hashes
 
