@@ -46,7 +46,9 @@ def prepare_sources() -> None:
         shutil.rmtree(SRC)
     shutil.copytree(ROOT / "docs", SRC)
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    readme = re.sub(r"\]\(docs/", "](", readme)
+    # README.md links to GitHub so that they work on PyPI too; the site has its own pages
+    readme = re.sub(r"\]\(https://(?:github\.com/sedrew/pyxbuild/blob|"
+                    r"raw\.githubusercontent\.com/sedrew/pyxbuild)/main/docs/", "](", readme)
     readme = readme.replace("](LICENSE)", "](https://github.com/sedrew/pyxbuild/blob/main/LICENSE)")
     (SRC / "index.md").write_text(readme, encoding="utf-8")
 

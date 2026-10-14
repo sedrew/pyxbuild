@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "pyxbuild"
 dynamic = ["version"]
 description = "Build Windows x64 and Linux applications from a standard Python project on any OS"
+keywords = ["exe", "windows", "packaging", "freeze", "cross-platform", "pyinstaller"]
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -17,6 +18,10 @@ classifiers = [
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Build Tools",
 ]
 dependencies = [
@@ -35,7 +40,9 @@ cross = ["ziglang>=0.13"]
 pyxbuild = "pyxbuild.cli:main"
 
 [project.urls]
+Homepage = "https://sedrew.github.io/pyxbuild/"
 Source = "https://github.com/sedrew/pyxbuild"
+Issues = "https://github.com/sedrew/pyxbuild/issues"
 
 [tool.hatch.version]
 path = "src/pyxbuild/__init__.py"
