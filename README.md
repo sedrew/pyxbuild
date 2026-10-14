@@ -44,6 +44,14 @@ Building an `.exe` (or a Linux executable) here means *assembling*, not compilin
 
 The result is byte-for-byte the same on every build host.
 
+## Installation
+
+```console
+pip install pyxbuild          # or: uv tool install pyxbuild / pipx install pyxbuild
+```
+
+Python 3.11+ on Windows, macOS or Linux.
+
 ## Usage
 
 ```toml
@@ -207,7 +215,7 @@ color, light or dark like Windows, sharp on scaled displays, rounded corners
 on Windows 11; it never takes the focus. `onefile-progress = "classic"` shows
 a plain box with the percentage instead, `"off"` nothing. Under Wine:
 
-![Progress window of a onefile GUI app](docs/images/onefile-progress.png)
+![Progress window of a onefile GUI app](https://raw.githubusercontent.com/sedrew/pyxbuild/main/docs/images/onefile-progress.png)
 
 Combine it with `bytecode = true` for a fast first start. `{app_dir}` in
 `[tool.pyxbuild.env]` is the extracted folder (bundled data), `{exe_dir}` the
@@ -261,7 +269,7 @@ same layout. Only a folder on another Windows drive is kept as an absolute
 
 * Every dependency needs a wheel for the target (`win_amd64` or
   `manylinux_*`, `abi3` included) or a pure-Python one on the index, or one of
-  the fallbacks in [docs/NO_WHEEL.md](docs/NO_WHEEL.md)
+  the fallbacks in [docs/NO_WHEEL.md](https://github.com/sedrew/pyxbuild/blob/main/docs/NO_WHEEL.md)
   (`pure-python`, Windows-CI wheels via `find-links`, experimental
   `cross-compile` with zig — 14 of 19 tested sdists build that way).
 * The project itself must be pure Python.
@@ -272,14 +280,14 @@ same layout. Only a folder on another Windows drive is kept as an absolute
   macOS yet; the Windows-only features are listed under
   [Linux applications](#linux-applications).
 
-Documentation: [design](docs/DESIGN.md) · [testing](docs/TESTING.md) ·
-[compatibility matrix](docs/COMPATIBILITY.md) (38 packages × Python 3.11–3.14) ·
-[real applications](docs/APPS.md) (Django, FastAPI, Streamlit, JupyterLab, zig cross-compiled extensions, … — 22 of 23 work) ·
-[no wheel for the target?](docs/NO_WHEEL.md) ·
-[real-world issues and coverage](docs/REAL_WORLD_ISSUES.md) ·
-[benchmarks vs PyInstaller](docs/BENCHMARKS.md) ·
-[Go / TypeScript comparison](docs/GO_TYPESCRIPT.md) ·
-[open questions](docs/OPEN_QUESTIONS.md).
+Documentation: [design](https://github.com/sedrew/pyxbuild/blob/main/docs/DESIGN.md) · [testing](https://github.com/sedrew/pyxbuild/blob/main/docs/TESTING.md) ·
+[compatibility matrix](https://github.com/sedrew/pyxbuild/blob/main/docs/COMPATIBILITY.md) (38 packages × Python 3.11–3.14) ·
+[real applications](https://github.com/sedrew/pyxbuild/blob/main/docs/APPS.md) (Django, FastAPI, Streamlit, JupyterLab, zig cross-compiled extensions, … — 22 of 23 work) ·
+[no wheel for the target?](https://github.com/sedrew/pyxbuild/blob/main/docs/NO_WHEEL.md) ·
+[real-world issues and coverage](https://github.com/sedrew/pyxbuild/blob/main/docs/REAL_WORLD_ISSUES.md) ·
+[benchmarks vs PyInstaller](https://github.com/sedrew/pyxbuild/blob/main/docs/BENCHMARKS.md) ·
+[Go / TypeScript comparison](https://github.com/sedrew/pyxbuild/blob/main/docs/GO_TYPESCRIPT.md) ·
+[open questions](https://github.com/sedrew/pyxbuild/blob/main/docs/OPEN_QUESTIONS.md).
 
 `pyxbuild doctor` also checks the project's own imports (undeclared
 dependencies, POSIX-only modules such as `fcntl`), DLLs and the VC++ runtime,
