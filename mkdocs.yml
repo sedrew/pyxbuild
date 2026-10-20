@@ -36,6 +36,7 @@ nav:
   - Try in the browser: try.md
   - Guides:
       - When a package has no wheel: NO_WHEEL.md
+      - Inspecting builds: INSPECT.md
       - Compatibility: COMPATIBILITY.md
       - Real applications: APPS.md
       - Benchmarks: BENCHMARKS.md

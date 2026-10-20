@@ -15,6 +15,7 @@ import os
 import posixpath
 import re
 import warnings
+import zipfile
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -466,6 +467,26 @@ def _prune_empty_dirs(root: Path) -> None:
     for d in sorted((p for p in root.rglob("*") if p.is_dir()), key=lambda p: -len(p.parts)):
         if not any(d.iterdir()):
             d.rmdir()
+
+
+def wheel_site_files(wheel: Path) -> list[str]:
+    """Files ``wheel`` installs into site-packages, as paths relative to it.
+
+    The wheel's own file list (what its RECORD names): ``.data/purelib`` and
+    ``.data/platlib`` land in site-packages too, other ``.data`` schemes do not.
+    """
+    out = []
+    with zipfile.ZipFile(wheel) as zf:
+        for name in zf.namelist():
+            if name.endswith("/"):
+                continue
+            parts = name.split("/")
+            if parts[0].endswith(".data"):
+                if len(parts) < 3 or parts[1] not in ("purelib", "platlib"):
+                    continue
+                parts = parts[2:]
+            out.append("/".join(parts))
+    return sorted(out)
 
 
 def iter_files(root: Path) -> list[PurePosixPath]:

@@ -176,6 +176,9 @@ of the version it applies to). The launcher refuses to run unless
 by `keep_sha256`, the sha256 of their concatenated hex digests), `wheels`
 (url, sha256, size) and `files` for everything else, each from `base`
 (another path of the old version), `payload` or `wheel` (index, member).
+For `pyxbuild inspect` only (the patch ignores them): `new` on entries whose
+path the old version does not have, `removed` (paths of the old version the
+new one lacks) and `base-version`.
 The new version is assembled in `<target12>.tmp-<pid>-patch` under the
 target's mutex and renamed into place; then `.pyx-next` in the base folder
 (and in folders that pointed at the base) names `<target12>`. A cache-mode

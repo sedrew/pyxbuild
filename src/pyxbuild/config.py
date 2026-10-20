@@ -35,7 +35,7 @@ _KNOWN_KEYS = {
     "cross-compile", "pure-python", "extras", "scripts", "slim", "bytecode",
     "env", "clean-env", "app-id", "truststore", "gui-log", "dpi-aware", "keep-dev-files",
     "version-info", "utf8-mode", "onefile-extract", "onefile-progress",
-    "include", "strip-sources", "bytecode-optimize", "build-info",
+    "include", "strip-sources", "bytecode-optimize", "build-info", "require",
 }
 
 
@@ -76,6 +76,9 @@ class ProjectConfig:
     """An .ico file, or PNG image(s) (one per size, up to 256x256) made into one."""
     lock: Path | None = None
     exclude: list[str] = field(default_factory=list)
+    require: list[str] = field(default_factory=list)
+    """Patterns (relative to site-packages, like ``exclude``) that must each match
+    at least one file of the finished application; the build fails otherwise."""
     zip: bool = False
     dist_dir: Path = Path("dist")
     index_url: str | None = None
@@ -291,6 +294,16 @@ def load_config(project_dir: Path | str) -> ProjectConfig:
         cfg.lock = root / _str(tool["lock"], "lock")
     if "exclude" in tool:
         cfg.exclude = _str_list(tool["exclude"], "exclude")
+    if "require" in tool:
+        cfg.require = _str_list(tool["require"], "require")
+        for pattern in cfg.require:
+            parts = pattern.strip().strip("/").split("/")
+            if not pattern.strip() or "\\" in pattern or ".." in parts \
+                    or re.match(r"[A-Za-z]:", pattern):
+                raise ConfigError(
+                    f"[tool.pyxbuild] require: invalid pattern {pattern!r}",
+                    hint='patterns are relative to site-packages and use "/", '
+                         'e.g. "mypkg/data/*.yaml"')
     if "zip" in tool:
         if not isinstance(tool["zip"], bool):
             raise ConfigError("[tool.pyxbuild] zip must be true or false")

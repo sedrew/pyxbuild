@@ -19,7 +19,7 @@ from .config import ProjectConfig
 from .download import fetch, offline_mode
 from .errors import PyxbuildError, ResolveError
 from .imports import check_imports
-from .install import Excluder, InstallState, apply_excludes, install_wheel
+from .install import Excluder, InstallState, apply_excludes, install_wheel, wheel_site_files
 from .launcher import build_launcher
 from .local import resolve_local
 from .lock import (
@@ -545,6 +545,7 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     removed = state.excluded + apply_excludes(site_packages, Excluder(install_excludes(cfg)))
     if removed:
         _log(opts, f"[{tb.target.name}] excluded {len(removed)} file(s)")
+        _log_dropped(opts, tb, set(removed))
     boot = resources_files("pyxbuild").joinpath("_boot")
     for module in ("_pyxbuild_boot.py", "_pyxbuild_streams.py"):
         (runtime_dir / target.stdlib_dir(tb.python) / module).write_bytes(
@@ -613,6 +614,83 @@ def assemble(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path, opts: BuildOpti
     return created, report
 
 
+DROPPED_SHOWN = 20
+
+
+def _log_dropped(opts: BuildOptions, tb: TargetBuild, removed: set[str]) -> None:
+    """Name the files of the project's own and local wheels that exclude/slim left out.
+
+    Dependencies from an index are not listed: dropping their tests and
+    stubs is what the patterns are for; a file missing from your own
+    package is more often a surprise.
+    """
+    for wheel in [*tb.local_wheels, tb.project_wheel.path]:
+        dropped = [p for p in wheel_site_files(wheel) if p in removed]
+        if not dropped:
+            continue
+        shown = ", ".join(dropped[:DROPPED_SHOWN])
+        more = len(dropped) - DROPPED_SHOWN
+        _log(opts, f"[{tb.target.name}]   {wheel.name}: {shown}"
+             + (f" and {more} more" if more > 0 else ""))
+
+
+def _glob_prefix(pattern: str) -> list[str]:
+    """Literal leading directories of ``pattern``, longest first ("a/b/*.x" -> a/b, a)."""
+    parts = pattern.strip().strip("/").split("/")[:-1]
+    literal: list[str] = []
+    for part in parts:
+        if any(c in part for c in "*?["):
+            break
+        literal.append(part)
+    return ["/".join(literal[:n]) for n in range(len(literal), 0, -1)]
+
+
+def missing_required(cfg: ProjectConfig, tb: TargetBuild, app_dir: Path) -> list[str]:
+    """``require`` patterns that match no file of the assembled application.
+
+    One line per empty pattern, naming the wheel the file was expected from
+    when that can be told: a wheel that has matching files (left out by
+    exclude/slim/strip-sources), or the wheel that installs the pattern's
+    folder (the file is not in the wheel: package data not configured, or
+    the wheel was built from an incomplete source tree).
+    """
+    if not cfg.require:
+        return []
+    site = app_dir / RUNTIME_DIR / tb.target.site_packages(tb.python)
+    files = [p.relative_to(site).as_posix() for p in site.rglob("*") if p.is_file()]
+    empty = [pat for pat in cfg.require if not any(map(Excluder([pat]).matches, files))]
+    if not empty:
+        return []
+    wheels = {w: wheel_site_files(w) for w in
+              [*sorted(tb.wheels), *tb.local_wheels, tb.project_wheel.path]}
+    excluder = Excluder(install_excludes(cfg))
+    out = []
+    for pat in empty:
+        matcher = Excluder([pat])
+        line = f"{pat!r} matches no file"
+        having = [(w, [f for f in names if matcher.matches(f)]) for w, names in wheels.items()]
+        having = [(w, m) for w, m in having if m]
+        if having:
+            wheel, matched = having[0]
+            by = [p for p in excluder.patterns if Excluder([p]).matches(matched[0])]
+            why = (f"left out by exclude/slim pattern {by[0]!r}" if by
+                   else "removed by strip-sources" if cfg.strip_sources
+                   and matched[0].endswith(".py") else "removed during the build")
+            line += f": {wheel.name} has {matched[0]!r}, {why}"
+        else:
+            for prefix in _glob_prefix(pat):
+                owners = [w for w, names in wheels.items()
+                          if any(n.startswith(prefix + "/") for n in names)]
+                if owners:
+                    line += (f": expected from {owners[0].name}, which installs {prefix}/ "
+                             "but has no such file")
+                    break
+            else:
+                line += ": no wheel of the application has such a file"
+        out.append(line)
+    return out
+
+
 def windows_only_settings(cfg: ProjectConfig) -> list[str]:
     """Settings in effect only for Windows targets that the project changed."""
     found = []
@@ -664,6 +742,14 @@ def _build(cfg: ProjectConfig, opts: BuildOptions) -> list[BuildResult]:
             if len(shown) < len(report.findings):
                 _log(opts, f"[{target.name}] {len(report.findings) - len(shown)} informational "
                      f"note(s); run `pyxbuild doctor` to see them")
+            missing = missing_required(cfg, tb, staging)
+            if missing:
+                raise PyxbuildError(
+                    "required files are missing from the application ([tool.pyxbuild] "
+                    "require):\n  " + "\n  ".join(missing),
+                    hint="patterns are relative to site-packages; a file the wheel lacks "
+                         "must be added to the package's data (and to the source tree it "
+                         "is built from)")
             if report.errors and opts.strict:
                 raise PyxbuildError(
                     f"bundle check found {len(report.errors)} error(s)",
@@ -787,6 +873,8 @@ def check(cfg: ProjectConfig, opts: BuildOptions) -> list[tuple[str, doctor.Repo
             else:
                 _, report = assemble(scratch_cfg, tb, Path(tmp) / "app", opts,
                                      launchers=False)
+                for line in missing_required(cfg, tb, Path(tmp) / "app"):
+                    report.add(doctor.ERROR, f"require: {line}")
                 if not cfg.index_url:
                     _report_held_back(tb, report)
         out.append((target_name, report))
