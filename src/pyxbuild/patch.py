@@ -118,6 +118,9 @@ def make_patch(base_exe: Path, target_exe: Path, out: Path, *,
                             "installed to patch", hint='use onefile-extract = "cache"')
     info = json.loads(target_files["runtime/pyxbuild.json"])
     version = info["project"]["version"]
+    base_info = json.loads(base_files.get("runtime/pyxbuild.json", b"{}"))
+    base_version = base_info.get("project", {}).get("version")
+    removed = sorted(set(base_files) - set(target_files))
 
     in_base: dict[str, str] = {}
     base_sha: dict[str, str] = {}
@@ -141,6 +144,8 @@ def make_patch(base_exe: Path, target_exe: Path, out: Path, *,
             counts["base"] += 1
             continue
         entry = {"path": path, "sha256": digest, "size": len(data)}
+        if path not in base_sha:
+            entry["new"] = True  # for `pyxbuild inspect`: added, not replaced
         if digest in in_base:
             entry.update({"from": "base", "src": in_base[digest]})
         elif digest in public:
@@ -158,7 +163,10 @@ def make_patch(base_exe: Path, target_exe: Path, out: Path, *,
     patch = {"format": 1, "app": target_m["app"], "version": version,
              "base": base_m["onefile"], "target": target_m["onefile"],
              "keep": keep, "keep_sha256": keep_digest.hexdigest(),
-             "wheels": wheel_list, "files": entries}
+             "wheels": wheel_list, "files": entries,
+             # informational (`pyxbuild inspect`); the new folder is assembled
+             # from keep + files, so removed paths are simply not written
+             "base-version": base_version, "removed": removed}
 
     with tempfile.TemporaryDirectory(prefix="pyxbuild-patch-") as tmp:
         root = Path(tmp) / "payload"

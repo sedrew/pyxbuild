@@ -37,6 +37,12 @@ def check_resources():
     assert not files("features").joinpath("typing_only.pyi").is_file()  # excluded
 
 
+def check_local_package_data():
+    import featdata  # [tool.uv.sources] path dependency; its .yaml is in `require`
+
+    assert featdata.settings().startswith("greeting:")
+
+
 def check_metadata():
     from importlib.metadata import distribution, version
 
@@ -90,8 +96,8 @@ def check_argv():
 
 
 CHECKS = [check_argv, check_boot_env, check_utf8_mode, check_isolation, check_metadata,
-          check_resources, check_stdlib_extensions, check_tcl, check_subprocess_python,
-          check_multiprocessing]
+          check_resources, check_local_package_data, check_stdlib_extensions, check_tcl,
+          check_subprocess_python, check_multiprocessing]
 
 
 def _run_checks(out):

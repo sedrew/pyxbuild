@@ -1,4 +1,4 @@
-"""Command line interface: ``pyxbuild build | lock | doctor | sign | patch``."""
+"""Command line interface: ``pyxbuild build | lock | doctor | sign | patch | inspect``."""
 
 from __future__ import annotations
 
@@ -71,6 +71,17 @@ def _parser() -> argparse.ArgumentParser:
                          "patch runs instead of carrying their files")
     pt.add_argument("--lock", type=Path, default=Path("pylock.win_amd64.toml"),
                     help="lock file of the new build (for --fetch-public)")
+
+    ins = sub.add_parser("inspect", help="show what a onefile/patch executable, application "
+                                         "folder or its .zip/.tar.gz contains")
+    ins.add_argument("file", type=Path,
+                     help="onefile or patch executable, application folder, .zip or .tar.gz")
+    what = ins.add_mutually_exclusive_group()
+    what.add_argument("--list", nargs="*", metavar="GLOB", dest="list_globs",
+                      help="list files with their sizes (only those matching a GLOB, "
+                           "e.g. '*/mypkg/data/*'; * also matches /)")
+    what.add_argument("--extract", nargs="+", metavar=("DIR", "GLOB"),
+                      help="extract all files, or those matching a GLOB, into DIR")
     return parser
 
 
@@ -109,6 +120,8 @@ def _run(args: argparse.Namespace) -> int:
         return _sign(args)
     if args.command == "patch":
         return _patch(args)
+    if args.command == "inspect":
+        return _inspect(args)
     cfg = load_config(args.project)
     if args.python and args.python not in SUPPORTED_PYTHONS:
         raise PyxbuildError(f"unsupported --python {args.python}",
@@ -158,6 +171,24 @@ def _patch(args: argparse.Namespace) -> int:
     print(f"{info.path} ({info.size / 1024:.0f} KB): {info.app} {info.version}; "
           f"{info.reused} file(s) reused, {info.carried} carried "
           f"({info.carried_bytes / 1024:.0f} KB), {info.fetched} downloaded when applied")
+    return 0
+
+
+def _inspect(args: argparse.Namespace) -> int:
+    from .inspector import extract, listing, open_contents, summary
+
+    contents = open_contents(args.file)
+    if args.extract:
+        dest, *globs = args.extract
+        n = extract(contents, Path(dest), globs)
+        if n == 0 and globs:
+            raise PyxbuildError(f"no file matches {' '.join(globs)}",
+                                hint="see the paths with --list")
+        print(f"extracted {n} file(s) to {dest}")
+    elif args.list_globs is not None:
+        print("\n".join(listing(contents, args.list_globs)))
+    else:
+        print("\n".join(summary(contents)))
     return 0
 
 

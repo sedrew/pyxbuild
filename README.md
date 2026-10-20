@@ -70,6 +70,7 @@ python = "3.12"            # default: newest supported allowed by requires-pytho
 mode = "folder"            # or "onefile": a single .exe (see below)
 lock = "pylock.toml"       # default: pylock.win_amd64.toml
 exclude = ["tests/", "*.pyi"]
+require = ["mypkg/data/*.yaml"]  # fail the build if no such file is installed
 zip = true
 utf8-mode = false          # run the app with -X utf8
 icon = "assets/app.ico"    # launcher icon (or a list of PNGs); VERSIONINFO from [project]
@@ -101,6 +102,7 @@ pyxbuild build [--target win_amd64|linux_x86_64|linux_aarch64] [--python 3.12] [
 pyxbuild lock                    # resolve only, (re)write pylock.win_amd64.toml
 pyxbuild doctor                  # missing wheels, missing DLLs, VC++ runtime, long paths
 pyxbuild sign dist/myapp-win_amd64 --cert cert.pfx --password-env PFX_PASSWORD
+pyxbuild inspect dist/myapp.exe --list '*/mypkg/data/*'   # what is inside a build
 ```
 
 Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
@@ -125,6 +127,12 @@ Commit the lock file: `pyxbuild build --frozen` then never resolves again, and
   never installed for Windows or Linux (Arcade: 59 MB of ffmpeg).
 * `icon` takes an `.ico` or a list of PNG files (each up to 256×256; give 16,
   32, 48 and 256 px), stored in the launcher as they are.
+* `require` lists files the application must contain (patterns relative to
+  site-packages, like `exclude`): the build fails, naming the empty pattern
+  and the wheel the file was expected from, instead of the app failing on the
+  user's machine. `pyxbuild inspect` shows what a onefile/patch executable,
+  folder or `.zip` contains (`--list`, `--extract`); see
+  [inspecting builds](https://github.com/sedrew/pyxbuild/blob/main/docs/INSPECT.md).
 * `[tool.pyxbuild.build-info]` is stored as `"build-info"` in
   `runtime/pyxbuild.json` (`os.path.join(sys.prefix, "pyxbuild.json")`), e.g.
   a release channel or commit for an About box.
@@ -280,7 +288,8 @@ same layout. Only a folder on another Windows drive is kept as an absolute
   macOS yet; the Windows-only features are listed under
   [Linux applications](#linux-applications).
 
-Documentation: [design](https://github.com/sedrew/pyxbuild/blob/main/docs/DESIGN.md) · [testing](https://github.com/sedrew/pyxbuild/blob/main/docs/TESTING.md) ·
+Documentation: [design](https://github.com/sedrew/pyxbuild/blob/main/docs/DESIGN.md) ·
+[inspecting builds and required files](https://github.com/sedrew/pyxbuild/blob/main/docs/INSPECT.md) · [testing](https://github.com/sedrew/pyxbuild/blob/main/docs/TESTING.md) ·
 [compatibility matrix](https://github.com/sedrew/pyxbuild/blob/main/docs/COMPATIBILITY.md) (38 packages × Python 3.11–3.14) ·
 [real applications](https://github.com/sedrew/pyxbuild/blob/main/docs/APPS.md) (Django, FastAPI, Streamlit, JupyterLab, zig cross-compiled extensions, … — 22 of 23 work) ·
 [no wheel for the target?](https://github.com/sedrew/pyxbuild/blob/main/docs/NO_WHEEL.md) ·

@@ -140,7 +140,8 @@ def test_features_console(features_app):
     assert "FAIL" not in proc.stdout, proc.stdout + proc.stderr
     assert proc.returncode == 0, proc.stdout + proc.stderr
     for name in ("argv", "boot_env", "utf8_mode", "isolation", "metadata", "resources",
-                 "stdlib_extensions", "tcl", "subprocess_python", "multiprocessing"):
+                 "local_package_data", "stdlib_extensions", "tcl", "subprocess_python",
+                 "multiprocessing"):
         assert f"OK {name}" in proc.stdout
 
 

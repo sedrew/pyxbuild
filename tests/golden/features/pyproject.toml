@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "features"
 version = "0.3.0"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["featdata"]
 
 [project.scripts]
 features = "features.main:run"
@@ -14,8 +14,12 @@ features = "features.main:run"
 [project.gui-scripts]
 features-gui = "features.main:gui"
 
+[tool.uv.sources]
+featdata = { path = "packages/featdata" }
+
 [tool.pyxbuild]
 exclude = ["*.pyi"]
+require = ["features/data/*.txt", "featdata/data/*.yaml"]
 utf8-mode = true
 icon = "app.ico"
 
