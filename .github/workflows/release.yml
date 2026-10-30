@@ -49,6 +49,9 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # a re-run after a failed later step must not fail on files already on PyPI
+          skip-existing: true
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
