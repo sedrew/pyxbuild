@@ -39,7 +39,7 @@ $ pyxbuild inspect dist/myapp.exe
 dist/myapp.exe: onefile application (win_amd64)
   project:  myapp 1.2.0
   python:   3.12.13
-  pyxbuild: 0.1.0
+  pyxbuild: 0.2.0
   entry:    myapp.main:run
   extract:  cache (app 'myapp')
   files:    1662 (39.7 MB)

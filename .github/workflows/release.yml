@@ -1,7 +1,8 @@
 name: Release
 
-# Push a tag "v<version>" (the version in src/pyxbuild/__init__.py) to publish
-# to PyPI. Uses trusted publishing: no API token is stored in the repository.
+# Push a tag "v<version>" (the version in src/pyxbuild/__init__.py), or create
+# the release with that tag on GitHub, to publish to PyPI. Uses trusted
+# publishing: no API token is stored in the repository.
 on:
   push:
     tags: ["v*"]
@@ -48,7 +49,16 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # a re-run after a failed later step must not fail on files already on PyPI
+          skip-existing: true
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+        # the release may already exist when the tag was made with "Draft a new release"
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+          fi
